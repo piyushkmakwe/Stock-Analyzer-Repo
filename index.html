@@ -941,15 +941,17 @@ function pct(n){ return n==null?'N/A':n.toFixed(1)+'%'; }
 function clr(v,hi=true){ if(v==null||isNaN(v)) return 'color:var(--m)'; return (v>0)===hi?'color:var(--g)':'color:var(--r)'; }
 
 // ── Estimate sustainable 5-year growth (regression to mean)
-// Fundamental (self-sustaining) growth: retention ratio × ROIC.
-// This is internally consistent with the company's own returns, unlike raw CAGR.
+// Fundamental (self-sustaining) EPS growth: retention ratio × ROE.
+// ROE (not ROCE) is correct here — sustainable EPS growth is an equity-side
+// quantity, and Indian ROCE figures are typically pre-tax (EBIT / capital
+// employed), which would overstate growth by roughly the tax wedge.
 function calcFundamentalGrowth(d){
   if(!d.eps_ttm || d.eps_ttm<=0) return null;
   const payout = d.dividend_per_share!=null ? d.dividend_per_share/d.eps_ttm : 0;
   const retention = Math.max(0, Math.min(1, 1 - payout));
-  const roic = (d.roce_pct ?? d.roe_pct);
-  if(roic==null) return null;
-  return retention * (roic/100);
+  const roe = (d.roe_pct ?? d.roce_pct);
+  if(roe==null) return null;
+  return retention * (roe/100);
 }
 
 function estimateGrowth(d){
@@ -964,16 +966,20 @@ function estimateGrowth(d){
 }
 
 // ── Model 1: 3-Phase DCF (10-year) ──────────────────────
+// Discounts at d._wacc (CAPM-derived when beta is available, else the
+// sector-specific WACC) so the rate used in the math is the same one
+// shown in the report — previously this silently used the flat 12%.
 function calcDCF(d){
   const eps = d.eps_ttm;
   if(!eps || eps <= 0) return null;
+  const W  = d._wacc || getSectorConfig(d).wacc || WACC;
   const gH = d._g;                            // High-growth phase (yr 1-5)
   const rows = [];
   let cumPV = 0, cur = eps;
 
   for(let t=1;t<=5;t++){
     cur *= (1+gH);
-    const pv = cur / Math.pow(1+WACC, t);
+    const pv = cur / Math.pow(1+W, t);
     cumPV += pv;
     rows.push({yr:t, phase:'High Growth', eps:cur, g:gH, pv, cumPV:cumPV+0});
   }
@@ -981,7 +987,7 @@ function calcDCF(d){
     const gT = gH - (gH - TERMINAL_G) * (t/5);  // Linear decay to terminal
     cur *= (1+gT);
     const yr = 5+t;
-    const pv = cur / Math.pow(1+WACC, yr);
+    const pv = cur / Math.pow(1+W, yr);
     cumPV += pv;
     rows.push({yr, phase:'Transition', eps:cur, g:gT, pv, cumPV:cumPV+0});
   }
@@ -989,10 +995,10 @@ function calcDCF(d){
   const exitPE = Math.min(Math.max((d.sector_pe_avg||20)*0.70, 12), 28);
   const termEPS = cur * (1+TERMINAL_G);
   const termVal = termEPS * exitPE;
-  const termPV  = termVal / Math.pow(1+WACC, 10);
+  const termPV  = termVal / Math.pow(1+W, 10);
   cumPV += termPV;
 
-  return { fairVal: cumPV*(1-MOS), cumPV, termPV, termVal, exitPE, rows, gH };
+  return { fairVal: cumPV*(1-MOS), cumPV, termPV, termVal, exitPE, rows, gH, usedWACC: W };
 }
 
 // ── Model 2: Benjamin Graham Number ─────────────────────
@@ -1150,16 +1156,47 @@ function coreDataMissing(d){
 }
 
 // ── Rating derived purely from computed numbers ──────────
-function deriveRating(score5y, composite, d){
+// Guardrails: forensic red flags (Beneish, Altman), reverse-DCF expectation
+// checks, and the blended fair-value gap can only CAP the rating downward,
+// never raise it. A stock flagged for possible earnings manipulation or
+// balance-sheet distress must not print a BUY on scenario math alone.
+const RATING_ORDER = ['AVOID','HOLD','BUY','STRONG BUY'];
+function deriveRating(score5y, composite, d, guards){
   if(d && coreDataMissing(d).insufficient){
-    return { r:'INSUFFICIENT DATA', c:'LOW' };
+    return { r:'INSUFFICIENT DATA', c:'LOW', caps:[] };
   }
-  const r = score5y>=3.5 && composite>70 ? 'STRONG BUY'
-          : score5y>=2.5 && composite>58 ? 'BUY'
-          : score5y>=1.8 && composite>44 ? 'HOLD'
-          : 'AVOID';
+  let r = score5y>=3.5 && composite>70 ? 'STRONG BUY'
+        : score5y>=2.5 && composite>58 ? 'BUY'
+        : score5y>=1.8 && composite>44 ? 'HOLD'
+        : 'AVOID';
+  const caps = [];
+  const capTo = (max, why) => {
+    if(RATING_ORDER.indexOf(r) > RATING_ORDER.indexOf(max)){
+      caps.push({ from:r, to:max, why });
+      r = max;
+    }
+  };
+  if(guards){
+    const { beneish, altman, revDCF, fv } = guards;
+    if(beneish && beneish.flag)
+      capTo('HOLD', `Beneish M-score ${beneish.M.toFixed(2)} flags possible earnings manipulation — the reported numbers this analysis rests on may not be reliable.`);
+    if(altman && !altman.na && altman.zone==='Distress')
+      capTo('AVOID', `Altman Z-score ${altman.Z.toFixed(2)} is in the distress zone — elevated bankruptcy risk overrides the growth thesis.`);
+    else if(altman && !altman.na && altman.zone==='Grey')
+      capTo('BUY', `Altman Z-score ${altman.Z.toFixed(2)} is in the grey zone — balance-sheet stress cannot be ruled out.`);
+    if(revDCF && !revDCF.na && revDCF.bounded==='above')
+      capTo('HOLD', 'Reverse DCF: the price implies >60%/yr earnings growth — extreme expectations with very high disappointment risk.');
+    else if(revDCF && !revDCF.na && revDCF.implied!=null && revDCF.implied > revDCF.sustainable*1.25)
+      capTo('BUY', `Reverse DCF: the price already implies ${(revDCF.implied*100).toFixed(0)}%/yr growth vs a sustainable ${(revDCF.sustainable*100).toFixed(0)}%/yr — priced for perfection, no margin for error.`);
+    if(fv && d && d.current_price){
+      if(d.current_price > fv*1.25)
+        capTo('HOLD', `Price is ${((d.current_price/fv-1)*100).toFixed(0)}% above the blended fair value — the scenario upside depends on the market paying ever-richer multiples.`);
+      else if(d.current_price > fv)
+        capTo('BUY', 'Price is above the blended fair value of the valuation models — limited margin of safety at today’s level.');
+    }
+  }
   const c = composite>74 ? 'HIGH' : composite>57 ? 'MEDIUM' : 'LOW';
-  return {r, c};
+  return { r, c, caps };
 }
 
 // ── Reverse DCF: what EPS growth does today's price already imply? ──
@@ -1169,11 +1206,12 @@ function deriveRating(score5y, composite, d){
 function dcfImpliedValue(d, gH){
   const eps = d.eps_ttm;
   if(!eps || eps<=0) return null;
+  const W = d._wacc || getSectorConfig(d).wacc || WACC;   // same rate as the forward DCF
   let cur = eps, cumPV = 0;
-  for(let t=1;t<=5;t++){ cur*=(1+gH); cumPV += cur/Math.pow(1+WACC,t); }
-  for(let t=1;t<=5;t++){ const gT=gH-(gH-TERMINAL_G)*(t/5); cur*=(1+gT); cumPV += cur/Math.pow(1+WACC,5+t); }
+  for(let t=1;t<=5;t++){ cur*=(1+gH); cumPV += cur/Math.pow(1+W,t); }
+  for(let t=1;t<=5;t++){ const gT=gH-(gH-TERMINAL_G)*(t/5); cur*=(1+gT); cumPV += cur/Math.pow(1+W,5+t); }
   const exitPE = Math.min(Math.max((d.sector_pe_avg||20)*0.70,12),28);
-  cumPV += (cur*(1+TERMINAL_G)*exitPE)/Math.pow(1+WACC,10);
+  cumPV += (cur*(1+TERMINAL_G)*exitPE)/Math.pow(1+W,10);
   return cumPV;
 }
 function calcReverseDCF(d){
@@ -1429,6 +1467,9 @@ function renderReport(d){
   d.sd  = d.sector_specific_data?.[d.business_type] || {};
   const cfg = getSectorConfig(d);
 
+  // WACC first — every DCF variant below discounts at this same rate
+  const wacc = calcWACC(d); d._wacc = wacc ? wacc.wacc : (cfg.wacc||WACC);
+
   const dcf    = calcDCF(d);
   const graham = calcGraham(d);
   const lynch  = calcLynch(d);
@@ -1438,18 +1479,17 @@ function renderReport(d){
   const peg    = calcPEG(d.pe_ratio, d.profit_cagr_3yr_pct || d.eps_cagr_3yr_pct);
   const cl     = buildChecklist(d, peg);
   const sc     = calcScores(d, peg);
-  const usedWACC = cfg.wacc || WACC;
+  const usedWACC = d._wacc;
   const revDCF = calcReverseDCF(d);
   const fscore = calcPiotroski(d);
   const decomp = calcReturnDecomp(d, scen);
-
-  const score5y = scen && d.current_price ? Math.min(5, Math.max(1, scen.base5 / d.current_price)) : 2.0;
-  const { r: rating, c: conf } = deriveRating(score5y, sc.composite, d);
-  const news = calcNewsImpact(d, rating);
-  const wacc    = calcWACC(d); d._wacc = wacc ? wacc.wacc : (cfg.wacc||WACC);
-  const fcfDCF  = calcFCFDCF(d, d._wacc);
   const altman  = calcAltmanZ(d);
   const beneish = calcBeneishM(d);
+
+  const score5y = scen && d.current_price ? Math.min(5, Math.max(1, scen.base5 / d.current_price)) : 2.0;
+  const { r: rating, c: conf, caps: ratingCaps } = deriveRating(score5y, sc.composite, d, { beneish, altman, revDCF, fv });
+  const news = calcNewsImpact(d, rating);
+  const fcfDCF  = calcFCFDCF(d, d._wacc);
   const trend   = calcTrendStats(d);
   const resInc  = d.business_type==='BANKING_NBFC' ? calcResidualIncome(d, wacc?wacc.ke:(RF+ERP)) : null;
   const justPE  = calcJustifiedPE(d);
@@ -1485,7 +1525,7 @@ function renderReport(d){
       <td>Year ${r.yr}${r.yr===1?' <span style="font-size:0.5rem;color:var(--g);">▶ high growth</span>':r.yr===6?' <span style="font-size:0.5rem;color:var(--bl);">▶ transition</span>':''}</td>
       <td>${(r.g*100).toFixed(1)}%</td>
       <td>${fmtINR(r.eps,1)}</td>
-      <td>${(1/Math.pow(1+WACC,r.yr)).toFixed(4)}</td>
+      <td>${(1/Math.pow(1+(dcf?.usedWACC||WACC),r.yr)).toFixed(4)}</td>
       <td style="color:var(--g)">${fmtINR(r.pv,1)}</td>
       <td style="color:var(--bl)">${fmtINR(r.cumPV,1)}</td>
     </tr>`).join('') : '';
@@ -1644,6 +1684,11 @@ function renderReport(d){
           <span class="cbadge c${conf[0]}">${conf}</span>
           <span style="font-size:0.56rem;color:var(--m);margin-left:4px">Composite: ${sc.composite.toFixed(0)}/100</span>
         </div>
+        ${ratingCaps && ratingCaps.length ? `
+        <div style="margin-bottom:12px;padding:9px 12px;border-radius:8px;background:var(--ab);border:1px solid rgba(255,171,64,0.25)">
+          <div style="font-size:0.58rem;font-weight:800;color:var(--a);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:5px"><i class="fas fa-shield-halved"></i> Rating capped by guardrails</div>
+          ${ratingCaps.map(c=>`<div style="font-size:0.66rem;color:var(--t);line-height:1.55;margin-bottom:3px"><strong style="color:var(--a)">${c.from} → ${c.to}:</strong> ${c.why}</div>`).join('')}
+        </div>`:''}
         <div class="tg">
           <div class="tb"><div class="tbl">2Y Target (Base)</div><div class="tbv">${scen?fmtINR(scen.base2,0):'—'}</div></div>
           <div class="tb"><div class="tbl">5Y Target (Base)</div><div class="tbv">${scen?fmtINR(scen.base5,0):'—'}</div></div>
@@ -2232,7 +2277,8 @@ function generatePDFReport(){
   d._g  = estimateGrowth(d);
   d.sd  = d.sector_specific_data?.[d.business_type] || {};
   const cfg      = getSectorConfig(d);
-  const usedWACC = cfg.wacc || WACC;
+  const waccObj  = calcWACC(d); d._wacc = waccObj ? waccObj.wacc : (cfg.wacc||WACC);
+  const usedWACC = d._wacc;
   const dcf    = calcDCF(d);
   const graham = calcGraham(d);
   const lynch  = calcLynch(d);
@@ -2242,10 +2288,12 @@ function generatePDFReport(){
   const peg    = calcPEG(d.pe_ratio, d.profit_cagr_3yr_pct||d.eps_cagr_3yr_pct);
   const cl     = buildChecklist(d,peg);
   const sc     = calcScores(d,peg);
-  const score5y= scen&&d.current_price ? Math.min(5,Math.max(1,scen.base5/d.current_price)) : 2.0;
-  const {r:rating,c:conf} = deriveRating(score5y,sc.composite,d);
-  const passCount = cl.filter(x=>x.pass).length;
   const revDCF = calcReverseDCF(d);
+  const altmanG  = calcAltmanZ(d);
+  const beneishG = calcBeneishM(d);
+  const score5y= scen&&d.current_price ? Math.min(5,Math.max(1,scen.base5/d.current_price)) : 2.0;
+  const {r:rating,c:conf,caps:ratingCaps} = deriveRating(score5y,sc.composite,d,{ beneish:beneishG, altman:altmanG, revDCF, fv });
+  const passCount = cl.filter(x=>x.pass).length;
   const fscore = calcPiotroski(d);
   const decomp = calcReturnDecomp(d, scen);
   const news   = calcNewsImpact(d, rating);
@@ -2311,7 +2359,7 @@ function generatePDFReport(){
     <td style="${TD}color:#546e7a;">${r.phase}</td>
     <td style="${TDM}">${(r.g*100).toFixed(1)}%</td>
     <td style="${TDM}">${R(r.eps,1)}</td>
-    <td style="${TDM}color:#546e7a;">${(1/Math.pow(1+WACC,r.yr)).toFixed(4)}</td>
+    <td style="${TDM}color:#546e7a;">${(1/Math.pow(1+(dcf?.usedWACC||WACC),r.yr)).toFixed(4)}</td>
     <td style="${TDM}color:#2e7d32;font-weight:600;">${R(r.pv,1)}</td>
     <td style="${TDM}color:#1565c0;font-weight:600;">${R(r.cumPV,1)}</td>
   </tr>`).join('') : '';
@@ -2986,6 +3034,11 @@ function generatePDFReport(){
             <div style="font-size:9px;color:#546e7a;margin-top:2px;">Composite Quality Score: ${sc.composite.toFixed(0)}/100 · Checklist: ${passCount}/10 passed</div>
           </div>
         </div>
+        ${ratingCaps && ratingCaps.length ? `
+        <div style="background:#fff3e0;border:1px solid #ffb74d;border-radius:6px;padding:8px 12px;margin-bottom:10px;">
+          <div style="font-size:8px;font-weight:800;color:#e65100;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;">Rating capped by guardrails</div>
+          ${ratingCaps.map(c=>`<div style="font-size:8px;color:#37474f;line-height:1.5;margin-bottom:2px;"><strong style="color:#e65100;">${c.from} &rarr; ${c.to}:</strong> ${c.why}</div>`).join('')}
+        </div>`:''}
         <div class="g4" style="margin-bottom:10px;">
           ${[
             {l:'CMP',v:R(d.current_price,0),c:'#37474f'},
@@ -3301,6 +3354,39 @@ async function loadLiveModels(){
   }catch(e){ status.textContent = '· could not load live list ('+e.message+')'; }
 }
 
+// Extract the first complete, parseable JSON object from an AI reply.
+// Models often wrap the JSON in ```fences``` or append commentary after it;
+// a greedy first-{-to-last-} regex breaks on any trailing text, so instead
+// scan with a brace-depth counter (string/escape aware) and try each
+// balanced candidate until one parses.
+function extractJSON(txt){
+  const s = txt.replace(/```json|```/g, '');
+  let start = s.indexOf('{');
+  while(start !== -1){
+    let depth = 0, inStr = false, escaped = false;
+    for(let i = start; i < s.length; i++){
+      const ch = s[i];
+      if(escaped){ escaped = false; continue; }
+      if(inStr){
+        if(ch === '\\') escaped = true;
+        else if(ch === '"') inStr = false;
+        continue;
+      }
+      if(ch === '"') inStr = true;
+      else if(ch === '{') depth++;
+      else if(ch === '}'){
+        depth--;
+        if(depth === 0){
+          try{ return JSON.parse(s.slice(start, i+1)); }
+          catch(_){ break; }   // malformed candidate — try the next '{'
+        }
+      }
+    }
+    start = s.indexOf('{', start + 1);
+  }
+  return null;
+}
+
 // Dispatch → returns the raw text reply from the chosen provider
 async function callAI(provider, key, model, userMsg){
   return provider==='gemini' ? callGemini(key, model, userMsg) : callClaude(key, model, userMsg);
@@ -3402,9 +3488,8 @@ async function analyze(){
     clearInterval(timer);
     for(let i=1;i<=6;i++){ const el=document.getElementById('s'+i); if(el){ el.classList.remove('active'); el.classList.add('done'); } }
 
-    const m = txt.match(/\{[\s\S]*\}/);
-    if(!m) throw new Error('Could not extract JSON from the AI response. The model may have returned an unexpected format — try again, or switch models.');
-    rawData = JSON.parse(m[0].replace(/```json|```/g,'').trim());
+    rawData = extractJSON(txt);
+    if(!rawData) throw new Error('Could not extract JSON from the AI response. The model may have returned an unexpected format — try again, or switch models.');
     rawData._engineLabel = `${cfg.label} · ${model}`;
     // ── 2. Verified numbers override the AI's — same stock, same result ──
     if(verified){
