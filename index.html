@@ -1554,7 +1554,7 @@ function renderReport(d){
     <div class="rs" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 14px;border-radius:10px;margin-bottom:12px;background:var(--gb);border:1px solid rgba(0,230,118,0.22)">
       <i class="fas fa-shield-check" style="color:var(--g)"></i>
       <div style="font-size:0.66rem;color:var(--t);line-height:1.5">
-        <strong style="color:var(--g)">${d._provenance.fields.length} core figures verified</strong> via ${d._provenance.sources.join(' + ')}${d._provenance.symbol?` (${d._provenance.symbol})`:''} · as of ${d._provenance.asOf} — these override AI-sourced values, so results are consistent across AI models.
+        <strong style="color:var(--g)">${d._provenance.fields.length} core figures verified</strong> via ${d._provenance.sources.join(' + ')}${d._provenance.symbol?` (${esc(d._provenance.symbol)})`:''} · as of ${d._provenance.asOf} — these override AI-sourced values, so results are consistent across AI models.
         <span style="color:var(--m)">AI supplied: growth history, sector &amp; quant data, news.</span>
       </div>
     </div>` : `
@@ -1852,9 +1852,9 @@ function renderReport(d){
             <div style="font-size:0.71rem;font-weight:700;color:var(--t);margin-bottom:3px">${esc(n.headline)}</div>
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span style="font-size:0.54rem;color:var(--m);font-family:'JetBrains Mono',monospace">${esc(n.date)||''}</span>
-              <span style="font-size:0.54rem;font-weight:800;color:${sc};text-transform:uppercase">${n.sentiment||''}</span>
+              <span style="font-size:0.54rem;font-weight:800;color:${sc};text-transform:uppercase">${esc(n.sentiment)||''}</span>
               ${n.impact?`<span style="font-size:0.53rem;font-weight:700;color:${ic};border:1px solid ${ic};padding:1px 6px;border-radius:99px">${esc(n.impact)} impact</span>`:''}
-              ${n.horizon?`<span style="font-size:0.53rem;font-weight:600;color:var(--bl);background:var(--blb);padding:1px 6px;border-radius:99px">${n.horizon}</span>`:''}
+              ${n.horizon?`<span style="font-size:0.53rem;font-weight:600;color:var(--bl);background:var(--blb);padding:1px 6px;border-radius:99px">${esc(n.horizon)}</span>`:''}
               ${n.source?`<span style="font-size:0.52rem;color:var(--m2)">${esc(n.source)}</span>`:''}
             </div>
             ${n.effect?`<div style="font-size:0.63rem;color:var(--m);margin-top:4px;line-height:1.5"><i class="fas fa-arrow-right-long" style="color:${sc};font-size:0.55rem"></i> ${esc(n.effect)}</div>`:''}
@@ -2173,7 +2173,7 @@ Fair Price = (Fair_EV − Debt + Cash) ÷ Shares
     <div class="card rs">
       <div class="ch"><div class="ct"><i class="fas fa-triangle-exclamation" style="color:var(--r)"></i> Risk Factors</div></div>
       <div class="cb">
-        ${(d.risks||[]).map(r=>`<div class="ri"><span class="rsev s${r.severity[0]}">${r.severity}</span><div><div class="rf">${esc(r.factor)}</div><div class="rm"><i class="fas fa-shield" style="color:var(--g);margin-right:4px;font-size:0.58rem"></i>${esc(r.mitigation)}</div></div></div>`).join('')}
+        ${(d.risks||[]).map(r=>`<div class="ri"><span class="rsev s${r.severity[0]}">${esc(r.severity)}</span><div><div class="rf">${esc(r.factor)}</div><div class="rm"><i class="fas fa-shield" style="color:var(--g);margin-right:4px;font-size:0.58rem"></i>${esc(r.mitigation)}</div></div></div>`).join('')}
       </div>
     </div>
 
@@ -2199,7 +2199,7 @@ function renderRec(){
   if(!recent.length){ r.style.display='none'; return; }
   r.style.display = 'flex';
   r.innerHTML = '<span class="rec-lbl">Recent:</span>' +
-    recent.slice(0,6).map(s=>`<span class="rtag" onclick="useRec(this.textContent)">${s}</span>`).join('');
+    recent.slice(0,6).map(s=>`<span class="rtag" onclick="useRec(this.textContent)">${esc(s)}</span>`).join('');
 }
 function useRec(s){ document.getElementById('stock-input').value=s; analyze(); }
 function saveRec(s){
@@ -2349,7 +2349,7 @@ function generatePDFReport(){
     const sc={High:'#c62828',Medium:'#e65100',Low:'#2e7d32'}[r.severity]||'#546e7a';
     const sb={High:'#ffebee',Medium:'#fff3e0',Low:'#e8f5e9'}[r.severity]||'#f5f7fa';
     return `<tr>
-      <td style="${TD}"><span style="background:${sb};color:${sc};padding:2px 8px;border-radius:99px;font-size:7px;font-weight:800;text-transform:uppercase;">${r.severity}</span></td>
+      <td style="${TD}"><span style="background:${sb};color:${sc};padding:2px 8px;border-radius:99px;font-size:7px;font-weight:800;text-transform:uppercase;">${esc(r.severity)}</span></td>
       <td style="${TD}font-weight:700;">${esc(r.factor)}</td>
       <td style="${TD}color:#546e7a;font-size:8px;">${esc(r.mitigation)}</td>
     </tr>`;
