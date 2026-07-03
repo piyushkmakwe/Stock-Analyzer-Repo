@@ -6,7 +6,6 @@
 <title>Multibagger AI — Precision Stock Analyzer</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Bebas+Neue&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <style>
 :root{
   --bg:#080c10;--sf:#0e1318;--s2:#141b22;--s3:#1c242d;
@@ -2266,873 +2265,395 @@ function copyJSON(){
 }
 
 // ════════════════════════════════════════════════════════
-// PDF REPORT GENERATOR
+// PDF REPORT — native print pipeline
+// buildPrintReport() composes a standalone, light-theme, A4
+// print-ready HTML document in plain language with div-based
+// charts (no canvas, no external libraries). generatePDFReport()
+// opens it in a new tab and triggers the browser print dialog —
+// choose "Save as PDF" there.
+// The previous html2pdf.js/html2canvas screenshot approach was
+// removed: it silently produced blank pages on many machines and
+// depended on a CDN script.
 // ════════════════════════════════════════════════════════
-function generatePDFReport(){
-  if(!rawData){ alert('Please run an analysis first.'); return; }
-  const btn = document.querySelector('[onclick="generatePDFReport()"]');
-  if(btn){ btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Building PDF…'; btn.disabled=true; }
 
-  const d = rawData;
+// ── tiny chart builders (pure divs — reliable in print) ──
+const PDF_INK='#0b0b0b', PDF_INK2='#52514e', PDF_MUT='#898781', PDF_GRID='#e1e0d9',
+      PDF_BLUE='#2a78d6', PDF_AQUA='#1baf7a',
+      PDF_GOOD='#0ca30c', PDF_WARN='#fab219', PDF_SER='#ec835a', PDF_CRIT='#d03b3b',
+      PDF_GOODTXT='#006300';
+
+function pdfNum(n,dec=0){ if(n==null||isNaN(n)) return 'N/A'; return n.toLocaleString('en-IN',{minimumFractionDigits:dec,maximumFractionDigits:dec}); }
+function pdfINR(n,dec=0){ if(n==null||isNaN(n)) return 'N/A'; return '₹'+pdfNum(n,dec); }
+function pdfPct(n,dec=1){ return n==null||isNaN(n) ? 'N/A' : n.toFixed(dec)+'%'; }
+
+// Vertical bar panel: one measure, one hue, every bar value-labelled
+// (labels double as the contrast relief for the light aqua hue).
+function pdfBarPanel(title, sub, labels, values, { color=PDF_BLUE, fmt=pdfNum }={}){
+  const pts = labels.map((l,i)=>({ l, v: (values&&values[i]!=null&&!isNaN(values[i]))?+values[i]:null }));
+  if(!pts.some(p=>p.v!=null)) return '';
+  const max = Math.max(...pts.map(p=>p.v??0), 0.0001);
+  const bars = pts.map(p=>`
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:3px;min-width:0">
+      <div style="font-size:8.5px;font-weight:700;color:${PDF_INK}">${p.v!=null?fmt(p.v):'–'}</div>
+      <div style="width:70%;max-width:34px;height:${p.v!=null?Math.max(3,(p.v/max*78)).toFixed(1):0}px;background:${color};border-radius:4px 4px 0 0"></div>
+      <div style="font-size:8px;color:${PDF_MUT};border-top:1px solid ${PDF_GRID};width:100%;text-align:center;padding-top:3px">${esc(p.l)}</div>
+    </div>`).join('');
+  return `
+  <div style="border:1px solid ${PDF_GRID};border-radius:8px;padding:10px 12px 8px;background:#fff">
+    <div style="font-size:9.5px;font-weight:800;color:${PDF_INK}">${title}</div>
+    <div style="font-size:8px;color:${PDF_MUT};margin-bottom:8px">${sub}</div>
+    <div style="display:flex;align-items:flex-end;gap:2px;height:110px">${bars}</div>
+  </div>`;
+}
+
+// Horizontal fair-value bars with a dashed "today's price" reference line.
+function pdfValueChart(items, cmp){
+  const rows = items.filter(m=>m.val!=null&&m.val>0);
+  if(!rows.length || !cmp) return '';
+  const max = Math.max(...rows.map(m=>m.val), cmp)*1.12;
+  const cmpPct = (cmp/max*100).toFixed(1);
+  return `
+  <div style="border:1px solid ${PDF_GRID};border-radius:8px;padding:12px 14px;background:#fff">
+    <div style="font-size:9.5px;font-weight:800;color:${PDF_INK};margin-bottom:2px">What each model says the share is worth</div>
+    <div style="font-size:8px;color:${PDF_MUT};margin-bottom:10px">Bars = model fair value · dashed line = today's price (${pdfINR(cmp)})</div>
+    <div style="position:relative">
+      <div style="position:absolute;left:${cmpPct}%;top:-4px;bottom:-2px;border-left:2px dashed ${PDF_INK};opacity:0.65;z-index:2"></div>
+      <div style="position:absolute;left:${cmpPct}%;top:-14px;transform:translateX(-50%);font-size:7.5px;font-weight:700;color:${PDF_INK};white-space:nowrap;background:#fff;padding:0 3px">CMP</div>
+      ${rows.map(m=>{
+        const w=(m.val/max*100).toFixed(1);
+        const up=(m.val-cmp)/cmp*100;
+        return `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <div style="width:118px;font-size:8.5px;color:${PDF_INK2};text-align:right;flex-shrink:0">${m.nm}</div>
+          <div style="flex:1;position:relative;height:14px">
+            <div style="position:absolute;left:0;top:0;bottom:0;width:${w}%;background:${PDF_BLUE};border-radius:0 4px 4px 0"></div>
+            <div style="position:absolute;left:calc(${w}% + 5px);top:1px;font-size:8.5px;font-weight:700;color:${PDF_INK};white-space:nowrap">${pdfINR(m.val)} <span style="color:${up>=0?PDF_GOODTXT:PDF_CRIT};font-weight:700">(${up>=0?'+':''}${up.toFixed(0)}%)</span></div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+// Bear / Base / Bull range strip — every marker carries its own label,
+// so the status colors never work alone.
+function pdfRangeStrip(scen, cmp){
+  if(!scen || !cmp) return '';
+  const pts=[
+    {l:'Bear',   v:scen.bear5, c:PDF_CRIT},
+    {l:'Today',  v:cmp,        c:PDF_INK},
+    {l:'Base',   v:scen.base5, c:PDF_BLUE},
+    {l:'Bull',   v:scen.bull5, c:PDF_GOOD}
+  ];
+  const mn=Math.min(...pts.map(p=>p.v))*0.9, mx=Math.max(...pts.map(p=>p.v))*1.06;
+  const pp=v=>((v-mn)/(mx-mn)*100).toFixed(1);
+  return `
+  <div style="border:1px solid ${PDF_GRID};border-radius:8px;padding:30px 18px 30px;background:#fff">
+    <div style="height:6px;background:${PDF_GRID};border-radius:3px;position:relative">
+      ${pts.map((p,i)=>`
+      <div style="position:absolute;left:${pp(p.v)}%;top:-7px;transform:translateX(-50%);width:3px;height:20px;background:${p.c};border-radius:2px">
+        <div style="position:absolute;${i%2?'top:-16px':'bottom:-16px'};left:50%;transform:translateX(-50%);font-size:8px;font-weight:800;color:${p.c};white-space:nowrap">${p.l} ${pdfINR(p.v)}</div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+// Stat tile — status colors always paired with a symbol + words.
+function pdfTile(label, value, sub, tone){
+  const c = tone==='good'?PDF_GOODTXT : tone==='warn'?'#a36f00' : tone==='crit'?PDF_CRIT : PDF_INK;
+  const ic = tone==='good'?'✓' : tone==='warn'?'▲' : tone==='crit'?'✕' : '';
+  return `
+  <div style="border:1px solid ${PDF_GRID};border-radius:8px;padding:9px 11px;background:#fff">
+    <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:${PDF_MUT};margin-bottom:3px">${label}</div>
+    <div style="font-size:13px;font-weight:800;color:${c}">${ic?ic+' ':''}${value}</div>
+    ${sub?`<div style="font-size:7.5px;color:${PDF_INK2};margin-top:2px;line-height:1.4">${sub}</div>`:''}
+  </div>`;
+}
+
+function pdfSection(no, title, intro){
+  return `
+  <div style="margin:0 0 10px;border-bottom:2px solid ${PDF_INK};padding-bottom:6px">
+    <div style="font-size:14px;font-weight:800;color:${PDF_INK}">${no}. ${title}</div>
+    ${intro?`<div style="font-size:9px;color:${PDF_INK2};margin-top:3px;line-height:1.55">${intro}</div>`:''}
+  </div>`;
+}
+
+// ── the report document ──────────────────────────────────
+function buildPrintReport(d){
+  // Same deterministic pipeline as the on-screen report
   d._g  = estimateGrowth(d);
   d.sd  = d.sector_specific_data?.[d.business_type] || {};
-  const cfg      = getSectorConfig(d);
-  const waccObj  = calcWACC(d); d._wacc = waccObj ? waccObj.wacc : (cfg.wacc||WACC);
-  const usedWACC = d._wacc;
-  const dcf    = calcDCF(d);
-  const graham = calcGraham(d);
-  const lynch  = calcLynch(d);
-  const ev     = calcEV(d);
-  const fv     = calcFV(d,dcf,graham,lynch,ev);
-  const scen   = calcScenarios(d);
-  const peg    = calcPEG(d.pe_ratio, d.profit_cagr_3yr_pct||d.eps_cagr_3yr_pct);
-  const cl     = buildChecklist(d,peg);
-  const sc     = calcScores(d,peg);
-  const revDCF = calcReverseDCF(d);
-  const altmanG  = calcAltmanZ(d);
-  const beneishG = calcBeneishM(d);
-  const score5y= scen&&d.current_price ? Math.min(5,Math.max(1,scen.base5/d.current_price)) : 2.0;
-  const {r:rating,c:conf,caps:ratingCaps} = deriveRating(score5y,sc.composite,d,{ beneish:beneishG, altman:altmanG, revDCF, fv });
-  const passCount = cl.filter(x=>x.pass).length;
-  const fscore = calcPiotroski(d);
-  const decomp = calcReturnDecomp(d, scen);
-  const news   = calcNewsImpact(d, rating);
+  const cfg = getSectorConfig(d);
+  const waccObj = calcWACC(d); d._wacc = waccObj ? waccObj.wacc : (cfg.wacc||WACC);
+  const dcf=calcDCF(d), graham=calcGraham(d), lynch=calcLynch(d), ev=calcEV(d);
+  const fv=calcFV(d,dcf,graham,lynch,ev);
+  const scen=calcScenarios(d);
+  const peg=calcPEG(d.pe_ratio, d.profit_cagr_3yr_pct||d.eps_cagr_3yr_pct);
+  const cl=buildChecklist(d,peg), sc=calcScores(d,peg);
+  const revDCF=calcReverseDCF(d), altman=calcAltmanZ(d), beneish=calcBeneishM(d);
+  const score5y = scen&&d.current_price ? Math.min(5,Math.max(1,scen.base5/d.current_price)) : 2.0;
+  const {r:rating,c:conf,caps} = deriveRating(score5y,sc.composite,d,{beneish,altman,revDCF,fv});
+  const fscore=calcPiotroski(d), decomp=calcReturnDecomp(d,scen), news=calcNewsImpact(d,rating), trend=calcTrendStats(d);
+  const passCount=cl.filter(x=>x.pass).length;
+  const cmp=d.current_price;
+  const genDate=new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'long',year:'numeric'});
+  const h=d.financial_history||{};
+  const name=esc(d.stock_name)||'—', tick=esc(d.ticker)||'—';
 
-  // Light-theme formatters for PDF
-  const R=(n,d=0)=>n==null||isNaN(n)?'N/A':'₹'+n.toFixed(d).replace(/\B(?=(\d{3})+(?!\d))/g,',');
-  const P=(n)=>n==null?'N/A':(n>=0?'+':'')+n.toFixed(1)+'%';
-  const X=(n)=>n==null||isNaN(n)?'N/A':n.toFixed(2)+'x';
-  const Pc=(n)=>n==null?'N/A':n.toFixed(1)+'%';
+  const ratingTone = rating==='STRONG BUY'||rating==='BUY' ? PDF_GOODTXT : rating==='HOLD' ? '#a36f00' : rating==='INSUFFICIENT DATA' ? PDF_INK2 : PDF_CRIT;
 
-  const ratingColor = rating==='STRONG BUY'?'#00695c':rating==='BUY'?'#1565c0':rating==='HOLD'?'#e65100':rating==='INSUFFICIENT DATA'?'#546e7a':'#c62828';
-  const ratingBg    = rating==='STRONG BUY'?'#e0f2f1':rating==='BUY'?'#e3f2fd':rating==='HOLD'?'#fff3e0':rating==='INSUFFICIENT DATA'?'#eceff1':'#ffebee';
-  const scoreColor  = score5y>=4?'#00695c':score5y>=3?'#1565c0':score5y>=2?'#e65100':'#c62828';
-  const fwdEPS5 = d.eps_ttm ? d.eps_ttm*Math.pow(1+d._g,5) : null;
+  // ── plain-language building blocks ──
+  const mult = scen&&cmp ? scen.base5/cmp : null;
+  const verdictWords =
+    rating==='INSUFFICIENT DATA' ? `We could not gather enough reliable data to rate ${name} — several core figures were missing. Treat everything in this report as incomplete.` :
+    rating==='STRONG BUY' ? `Our models suggest ${name} could roughly ${mult?mult.toFixed(1)+'×':'multiply'} your money over 5 years in the middle-of-the-road case, and the company scores well on quality checks. That combination is rare — hence the strongest rating.` :
+    rating==='BUY'  ? `Our models point to meaningful upside over 5 years (base case ${mult?mult.toFixed(2)+'× today’s price':'above today’s price'}), and the company passes most quality checks. Worth serious consideration, with position sizing that respects the risks listed at the end.` :
+    rating==='HOLD' ? `The upside our models find is modest, or important warning signs cap our enthusiasm. This is a "watch, don’t chase" situation — the reasons are spelled out below.` :
+    `The numbers do not support buying at today’s price: projected returns are weak and/or serious red flags appeared in the health checks below.`;
 
-  // Gauge SVG for PDF (light bg)
-  const R2=70,CX2=85,CY2=78;
-  const ang2=(score5y-1)/4;
-  const sx2=CX2+R2*Math.cos(Math.PI),sy2=CY2+R2*Math.sin(Math.PI);
-  const fa2=Math.PI+(Math.PI*-1)*ang2;
-  const ex2=CX2+R2*Math.cos(fa2),ey2=CY2+R2*Math.sin(fa2);
-  const laf2=ang2>0.5?1:0;
+  const capBlock = caps&&caps.length ? `
+    <div style="background:#fff8ec;border:1px solid ${PDF_WARN};border-radius:8px;padding:10px 13px;margin-top:10px">
+      <div style="font-size:9px;font-weight:800;color:#a36f00;margin-bottom:4px">▲ WHY THE RATING WAS REDUCED</div>
+      ${caps.map(c=>`<div style="font-size:8.5px;color:${PDF_INK2};line-height:1.55;margin-bottom:3px"><strong style="color:#a36f00">${c.from} → ${c.to}:</strong> ${c.why}</div>`).join('')}
+      <div style="font-size:8px;color:${PDF_MUT};margin-top:4px">These guardrails only ever lower a rating — a stock must clear every safety screen to keep a bullish verdict.</div>
+    </div>` : '';
 
-  // Table style shortcuts
-  const TH='padding:8px 10px;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#546e7a;background:#f5f7fa;border-bottom:2px solid #e0e0e0;text-align:left;';
-  const TD='padding:7px 10px;font-size:9px;border-bottom:1px solid #f0f0f0;color:#37474f;';
-  const TDM='padding:7px 10px;font-size:9px;border-bottom:1px solid #f0f0f0;color:#37474f;font-family:JetBrains Mono,monospace;';
-  const KBX=(bg='#f5f7fa',border='#e0e0e0')=>`background:${bg};border:1px solid ${border};border-radius:6px;padding:9px 12px;`;
-  const KLBL='font-size:7px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#90a4ae;margin-bottom:4px;';
-  const KVAL='font-family:JetBrains Mono,monospace;font-size:14px;font-weight:700;color:#1a237e;';
-  const KSB='font-size:7px;color:#90a4ae;margin-top:2px;';
+  // growth explanation
+  const growthWords = `The company grew profits about <strong>${pdfPct(d.profit_cagr_3yr_pct)}</strong> a year over the last 3 years. High growth rarely lasts, so we deliberately assume it cools to <strong>${pdfPct(d._g*100)}</strong> a year for the next 5 years (${cfg.name} companies historically keep about ${(cfg.growthReg*100)|0}% of their past pace). We also cross-check that the company can fund this growth itself: it keeps ${d.eps_ttm&&d.dividend_per_share!=null?pdfPct((1-d.dividend_per_share/d.eps_ttm)*100,0):'most'} of its profit in the business, earning ${pdfPct(d.roe_pct)} on shareholders’ money.`;
 
-  // Section header
-  const SH=(icon,title,color='#1a237e')=>`
-    <div style="display:flex;align-items:center;gap:8px;margin:18px 0 10px;padding-bottom:8px;border-bottom:2px solid ${color}20;">
-      <div style="width:26px;height:26px;background:${color};border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-        <span style="color:white;font-size:11px;">${icon}</span>
-      </div>
-      <span style="font-size:13px;font-weight:800;color:${color};text-transform:uppercase;letter-spacing:0.06em;">${title}</span>
-    </div>`;
+  // stability verdict sentence
+  const stabilityBits=[];
+  if(d.debt_to_equity!=null) stabilityBits.push(d.debt_to_equity<0.5?`debt is low (₹${d.debt_to_equity.toFixed(2)} of borrowing per ₹1 of shareholder money)`:d.debt_to_equity<1?`debt is moderate (${d.debt_to_equity.toFixed(2)}× equity)`:`debt is high (${d.debt_to_equity.toFixed(2)}× equity) — a real risk in downturns`);
+  if(d.interest_coverage!=null) stabilityBits.push(d.interest_coverage>5?`profits cover interest payments ${d.interest_coverage.toFixed(1)}× over — very comfortable`:`interest cover of ${d.interest_coverage.toFixed(1)}× leaves less breathing room`);
+  if(d.promoter_pledge_pct!=null) stabilityBits.push(d.promoter_pledge_pct<5?`promoters have pledged almost none of their shares (${pdfPct(d.promoter_pledge_pct)})`:`promoters have pledged ${pdfPct(d.promoter_pledge_pct)} of their holding — worth watching`);
+  const stabilityWords = stabilityBits.length? 'In plain terms: '+stabilityBits.join('; ')+'.' : '';
 
-  // Build models table rows
-  const modelRows = [
-    {nm:'DCF (10Y, 3-Phase)',     val:dcf?.fairVal,  w:'40%'},
-    {nm:'Peter Lynch (P/E=g%)',   val:lynch,          w:'25%'},
-    {nm:'Graham Number √(22.5×EPS×BVPS)', val:graham, w:'15%'},
-    {nm:'EV/EBITDA Relative',     val:ev,             w:'20%'}
-  ].filter(m=>m.val!=null).map(m=>{
-    const up=(m.val-(d.current_price||0))/(d.current_price||1)*100;
-    const vc=up>=0?'#2e7d32':'#c62828';
-    return `<tr>
-      <td style="${TD}">${m.nm}</td>
-      <td style="${TD}weight:${m.w};">${m.w}</td>
-      <td style="${TDM}font-weight:700;color:#1a237e;">${R(m.val,0)}</td>
-      <td style="${TDM}color:${vc};font-weight:700;">${up>=0?'+':''}${up.toFixed(1)}%</td>
-      <td style="${TDM}color:${up>=0?'#2e7d32':'#c62828'};">${up>=0?'↑ Upside':'↓ Below CMP'}</td>
-    </tr>`;
-  }).join('');
+  const steadyWords = trend&&trend.revR2!=null ?
+    (trend.revR2>0.9?`Growth has been remarkably steady (steadiness score ${trend.revR2.toFixed(2)} out of 1) — the kind of predictability long-term investors pay up for.`
+    :trend.revR2>0.7?`Growth has been reasonably consistent (steadiness ${trend.revR2.toFixed(2)}/1), with some lumpy years.`
+    :`Growth has been lumpy (steadiness ${trend.revR2.toFixed(2)}/1) — future projections deserve extra caution.`) : '';
 
-  // DCF table rows
-  const dcfTableRows = dcf ? dcf.rows.map(r=>`<tr style="background:${r.phase==='Transition'?'#f5f7fa':'white'}">
-    <td style="${TD}font-weight:600;">Year ${r.yr} ${r.phase==='Transition'&&r.yr===6?'(Transition starts)':''}</td>
-    <td style="${TD}color:#546e7a;">${r.phase}</td>
-    <td style="${TDM}">${(r.g*100).toFixed(1)}%</td>
-    <td style="${TDM}">${R(r.eps,1)}</td>
-    <td style="${TDM}color:#546e7a;">${(1/Math.pow(1+(dcf?.usedWACC||WACC),r.yr)).toFixed(4)}</td>
-    <td style="${TDM}color:#2e7d32;font-weight:600;">${R(r.pv,1)}</td>
-    <td style="${TDM}color:#1565c0;font-weight:600;">${R(r.cumPV,1)}</td>
-  </tr>`).join('') : '';
+  const revWords = revDCF&&!revDCF.na&&revDCF.implied!=null ?
+    `Working backwards from today’s price: the market is currently paying for about <strong>${pdfPct(revDCF.implied*100)}</strong> yearly profit growth. Our sustainable estimate is <strong>${pdfPct(revDCF.sustainable*100)}</strong>. ${revDCF.implied>revDCF.sustainable*1.25?'The price already assumes better performance than the business has sustainably shown — that leaves little room for disappointment.':revDCF.implied<revDCF.sustainable*0.75?'The market expects less than the company has been delivering — if execution simply continues, patient investors are positioned well.':'Expectations look broadly fair.'}` : '';
 
-  // Quarterly rows
-  const qRows=(d.quarterly_results||[]).map(q=>{
-    const mg=q.revenue_cr&&q.profit_cr?(q.profit_cr/q.revenue_cr*100).toFixed(1)+'%':'N/A';
-    const up=(q.yoy_growth_pct||0)>0;
-    return `<tr>
-      <td style="${TD}font-weight:700;">${esc(q.quarter)}</td>
-      <td style="${TDM}">₹${q.revenue_cr?.toLocaleString()||'N/A'}</td>
-      <td style="${TDM}">₹${q.profit_cr?.toLocaleString()||'N/A'}</td>
-      <td style="${TDM}color:${up?'#2e7d32':'#c62828'};font-weight:700;">${q.yoy_growth_pct!=null?(up?'+':'')+q.yoy_growth_pct.toFixed(1)+'%':'N/A'}</td>
-      <td style="${TDM}color:#546e7a;">${mg}</td>
-      <td style="${TD}font-size:8px;color:#546e7a;">${esc(q.highlights)||'—'}</td>
-    </tr>`;
-  }).join('');
+  // scenario words
+  const scenWords = scen&&cmp ? `If growth disappoints badly (bear case), our models put the share near <strong>${pdfINR(scen.bear5)}</strong> in 5 years. If it broadly delivers (base case): <strong>${pdfINR(scen.base5)}</strong> (${(scen.base5/cmp).toFixed(2)}× today). If everything clicks (bull case): <strong>${pdfINR(scen.bull5)}</strong>. A sensible investor anchors on the base case and treats the bull case as a bonus, not a plan.` : '';
 
-  // Competitors rows
-  const compRows=(d.competitors||[]).map(c=>`<tr style="${c.is_target?'background:#e8f5e9;':''}">
-    <td style="${TD}font-weight:${c.is_target?'800':'600'};color:${c.is_target?'#1b5e20':'#37474f'};">
-      ${esc(c.name)}${c.is_target?' ★':''}
-    </td>
-    <td style="${TDM}">${esc(c.ticker)||'—'}</td>
-    <td style="${TDM}">₹${c.market_cap_cr?.toLocaleString()||'N/A'}</td>
-    <td style="${TDM}">${c.pe?.toFixed(1)||'N/A'}x</td>
-    <td style="${TDM}color:${(c.revenue_growth_pct||0)>0?'#2e7d32':'#c62828'};font-weight:700;">
-      ${c.revenue_growth_pct!=null?(c.revenue_growth_pct>0?'+':'')+c.revenue_growth_pct.toFixed(1)+'%':'N/A'}
-    </td>
-    <td style="${TD}font-size:8px;">${esc(c.strength)||'—'}</td>
-  </tr>`).join('');
+  // model explanations
+  const modelRows=[
+    {nm:'Discounted Cash Flow (10-yr)', val:dcf?.fairVal, why:'Projects 10 years of earnings, shrinks each year back to today’s value, and applies a 10% safety discount. Best single estimate of what the business itself is worth.'},
+    {nm:'Peter Lynch fair value',        val:lynch,        why:'The famous fund manager’s rule of thumb: a fair P/E roughly equals the growth rate. Quick sense-check for growth stocks.'},
+    {nm:'Graham Number',                 val:graham,       why:'Benjamin Graham’s conservative floor based on earnings and book value. Growth companies usually trade above it — it marks the deep-value anchor.'},
+    {nm:'EV/EBITDA vs sector',           val:ev,           why:'What the share would cost if the company traded at its sector’s average operating-profit multiple.'}
+  ];
 
-  // Risk rows
-  const riskRows=(d.risks||[]).map(r=>{
-    const sc={High:'#c62828',Medium:'#e65100',Low:'#2e7d32'}[r.severity]||'#546e7a';
-    const sb={High:'#ffebee',Medium:'#fff3e0',Low:'#e8f5e9'}[r.severity]||'#f5f7fa';
-    return `<tr>
-      <td style="${TD}"><span style="background:${sb};color:${sc};padding:2px 8px;border-radius:99px;font-size:7px;font-weight:800;text-transform:uppercase;">${esc(r.severity)}</span></td>
-      <td style="${TD}font-weight:700;">${esc(r.factor)}</td>
-      <td style="${TD}color:#546e7a;font-size:8px;">${esc(r.mitigation)}</td>
-    </tr>`;
-  }).join('');
+  // news / catalysts
+  const A=d.news_impact_assessment||{};
+  const newsWords = news ? `Of the ${news.count} recent verified headlines, ${news.pos} were positive, ${news.neg} negative and ${news.neu} neutral. ${esc(A.thesis_impact)||news.alignment}` : 'No recent verified news was available for this analysis.';
 
-  // Checklist rows (2-column grid via table)
-  const clLeft=cl.slice(0,5), clRight=cl.slice(5);
-  const clRows=clLeft.map((_,i)=>{
-    const L=cl[i], RR=cl[i+5];
-    return `<tr>
-      <td style="${TD}padding:5px 8px;">
-        <span style="color:${L.pass?'#2e7d32':'#c62828'};font-size:10px;margin-right:5px;">${L.pass?'✓':'✗'}</span>
-        <span style="font-weight:${L.pass?'700':'400'};color:${L.pass?'#1b5e20':'#78909c'};">${L.lbl}</span>
-        <div style="font-size:7px;color:#90a4ae;margin-left:18px;margin-top:1px;">${L.sub}</div>
-      </td>
-      ${RR?`<td style="${TD}padding:5px 8px;">
-        <span style="color:${RR.pass?'#2e7d32':'#c62828'};font-size:10px;margin-right:5px;">${RR.pass?'✓':'✗'}</span>
-        <span style="font-weight:${RR.pass?'700':'400'};color:${RR.pass?'#1b5e20':'#78909c'};">${RR.lbl}</span>
-        <div style="font-size:7px;color:#90a4ae;margin-left:18px;margin-top:1px;">${RR.sub}</div>
-      </td>`:'<td></td>'}
-    </tr>`;
-  }).join('');
+  // shareholding chart
+  const shHold = pdfBarPanel('Who owns the company','% of shares held',
+      ['Promoters','FIIs','DIIs','Public'],
+      [d.promoter_holding_pct, d.fii_holding_pct, d.dii_holding_pct,
+       (d.promoter_holding_pct!=null&&d.fii_holding_pct!=null&&d.dii_holding_pct!=null)?Math.max(0,100-d.promoter_holding_pct-d.fii_holding_pct-d.dii_holding_pct):null],
+      { color:PDF_AQUA, fmt:v=>v.toFixed(1)+'%' });
 
-  const govSchemes=(d.government_support_detail?.schemes||[]).map(s=>`
-    <div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:#e8f5e9;border-radius:6px;border-left:3px solid #4caf50;margin-bottom:7px;">
-      <div style="flex:1;">
-        <div style="font-size:9px;font-weight:700;color:#1b5e20;margin-bottom:2px;">${esc(s.name)}</div>
-        <div style="font-size:8px;color:#2e7d32;">${esc(s.benefit)}</div>
-        <div style="font-size:7px;font-weight:700;color:${s.impact==='High'?'#1b5e20':s.impact==='Medium'?'#e65100':'#546e7a'};margin-top:2px;">Impact: ${esc(s.impact)}</div>
-      </div>
-    </div>`).join('');
+  // ── document ──
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>${tick}_MultibaggerAI_Report</title>
+<style>
+  @page { size: A4; margin: 11mm 11mm 13mm; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body { font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif; color:${PDF_INK}; font-size:9.5px; line-height:1.6; background:#fff; }
+  .wrap { max-width:186mm; margin:0 auto; padding:12px 0 30px; }
+  .pgbrk { break-before:page; padding-top:6px; }
+  p { margin-bottom:7px; color:${PDF_INK2}; }
+  strong { color:${PDF_INK}; }
+  table { width:100%; border-collapse:collapse; }
+  th { font-size:7.5px; text-transform:uppercase; letter-spacing:0.05em; color:${PDF_MUT}; text-align:left; padding:5px 8px; border-bottom:1.5px solid ${PDF_GRID}; }
+  td { font-size:8.5px; color:${PDF_INK2}; padding:5px 8px; border-bottom:1px solid ${PDF_GRID}; vertical-align:top; }
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .no-print{position:fixed;top:10px;right:12px;z-index:9}
+  @media print { .no-print{display:none} }
+</style></head><body>
+<div class="no-print"><button onclick="window.print()" style="padding:9px 18px;background:${PDF_BLUE};color:#fff;border:none;border-radius:8px;font-weight:700;font-size:12px;cursor:pointer">Print / Save as PDF</button></div>
+<div class="wrap">
 
-  const futurePlans=(d.business_overview?.future_plans||[]).map(p=>`
-    <div style="display:flex;align-items:flex-start;gap:7px;margin-bottom:6px;">
-      <span style="color:#00897b;font-size:10px;margin-top:1px;flex-shrink:0;">→</span>
-      <span style="font-size:9px;color:#37474f;">${esc(p)}</span>
-    </div>`).join('');
-
-  const genDate = new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'long',year:'numeric'});
-
-  // ── THE FULL REPORT HTML ──────────────────────────────
-  const reportHTML = `
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0;}
-    body{font-family:'Space Grotesk',Arial,sans-serif;color:#263238;background:white;font-size:10px;}
-    .page{width:190mm;min-height:267mm;padding:0;margin:0 auto;position:relative;background:white;}
-    .page-break{page-break-before:always;break-before:always;padding-top:16px;}
-    table{width:100%;border-collapse:collapse;}
-    .mono{font-family:'JetBrains Mono',monospace;}
-    .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-    .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
-    .g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;}
-    .g5{display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;}
-  </style>
-
-  <!-- ══════════════════════════════════════════════ -->
-  <!-- PAGE 1: COVER PAGE                            -->
-  <!-- ══════════════════════════════════════════════ -->
-  <div class="page">
-    <!-- Header bar -->
-    <div style="background:linear-gradient(135deg,#00695c,#00897b);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <div style="width:32px;height:32px;background:rgba(255,255,255,0.2);border-radius:8px;display:flex;align-items:center;justify-content:center;">
-          <span style="color:white;font-size:14px;">📈</span>
-        </div>
-        <div>
-          <div style="font-size:16px;font-weight:800;color:white;letter-spacing:-0.01em;">MultibaggerAI</div>
-          <div style="font-size:8px;color:rgba(255,255,255,0.7);letter-spacing:0.1em;text-transform:uppercase;">Precision Investment Research</div>
-        </div>
-      </div>
-      <div style="text-align:right;">
-        <div style="font-size:8px;color:rgba(255,255,255,0.7);">Report Generated</div>
-        <div style="font-size:9px;font-weight:700;color:white;">${genDate}</div>
-      </div>
+  <!-- ══ COVER / VERDICT ══ -->
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${PDF_INK};padding-bottom:10px;margin-bottom:12px">
+    <div>
+      <div style="font-size:8px;font-weight:700;letter-spacing:0.12em;color:${PDF_MUT};text-transform:uppercase">MultibaggerAI · Equity Research Report</div>
+      <div style="font-size:21px;font-weight:800;line-height:1.15;margin-top:2px">${name}</div>
+      <div style="font-size:9px;color:${PDF_INK2};margin-top:2px">${tick} · ${esc(d.exchange)||'NSE'} · ${esc(d.sector)||'—'} ${d.sub_sector?('· '+esc(d.sub_sector)):''}</div>
     </div>
-
-    <!-- Cover content -->
-    <div style="padding:24px 24px 20px;">
-      <!-- Stock identity -->
-      <div style="border-bottom:2px solid #e0f2f1;padding-bottom:16px;margin-bottom:20px;">
-        <div style="font-size:8px;font-weight:700;color:#80cbc4;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px;">${esc(d.sector)||'—'} · ${esc(d.exchange)||'NSE'}</div>
-        <div style="font-size:28px;font-weight:800;color:#1a237e;letter-spacing:-0.02em;line-height:1.1;">${esc(d.stock_name)||'—'}</div>
-        <div style="font-size:11px;font-weight:600;color:#546e7a;margin-top:4px;font-family:'JetBrains Mono',monospace;">${esc(d.ticker)||'—'}  ·  ${esc(d.sub_sector)||esc(d.sector)||'—'}</div>
-      </div>
-
-      <!-- Price + Rating row -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
-        <!-- Price block -->
-        <div style="background:#f5f7fa;border-radius:10px;padding:14px;">
-          <div style="font-size:8px;font-weight:700;color:#90a4ae;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">Current Market Price</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:32px;font-weight:700;color:#1a237e;">${d.current_price?'₹'+d.current_price.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}):'N/A'}</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;">
-            <div><div style="font-size:7px;font-weight:700;color:#90a4ae;text-transform:uppercase;">52W High</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:#2e7d32;">${d.fifty_two_week_high?'₹'+d.fifty_two_week_high.toLocaleString():'N/A'}</div></div>
-            <div><div style="font-size:7px;font-weight:700;color:#90a4ae;text-transform:uppercase;">52W Low</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:#c62828;">${d.fifty_two_week_low?'₹'+d.fifty_two_week_low.toLocaleString():'N/A'}</div></div>
-            <div><div style="font-size:7px;font-weight:700;color:#90a4ae;text-transform:uppercase;">Market Cap</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:#1a237e;">${d.market_cap_cr?'₹'+d.market_cap_cr.toLocaleString()+' Cr':'N/A'}</div></div>
-            <div><div style="font-size:7px;font-weight:700;color:#90a4ae;text-transform:uppercase;">EPS (TTM)</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:#1565c0;">${d.eps_ttm?'₹'+d.eps_ttm.toFixed(2):'N/A'}</div></div>
-          </div>
-        </div>
-
-        <!-- Rating + Score block -->
-        <div style="background:${ratingBg};border:2px solid ${ratingColor}30;border-radius:10px;padding:14px;text-align:center;">
-          <div style="background:${ratingColor};color:white;display:inline-block;padding:6px 18px;border-radius:8px;font-size:14px;font-weight:800;letter-spacing:0.04em;margin-bottom:10px;">
-            ${rating==='STRONG BUY'?'⭐ '+rating:rating}
-          </div>
-          <div style="margin-bottom:8px;">
-            <svg width="170" height="100" viewBox="0 0 170 100">
-              <path d="M${CX2-R2} ${CY2} A${R2} ${R2} 0 0 1 ${CX2+R2} ${CY2}" fill="none" stroke="#e0e0e0" stroke-width="10" stroke-linecap="round"/>
-              <text x="10" y="90" fill="#bdbdbd" font-size="8" font-family="JetBrains Mono">1x</text>
-              <text x="78" y="10" fill="#bdbdbd" font-size="8" font-family="JetBrains Mono" text-anchor="middle">3x</text>
-              <text x="150" y="90" fill="#bdbdbd" font-size="8" font-family="JetBrains Mono">5x</text>
-              ${ang2>0?`<path d="M${sx2} ${sy2} A${R2} ${R2} 0 ${laf2} 1 ${ex2} ${ey2}" fill="none" stroke="${scoreColor}" stroke-width="10" stroke-linecap="round"/>`:''}
-              <circle cx="${ex2}" cy="${ey2}" r="5" fill="${scoreColor}"/>
-            </svg>
-          </div>
-          <div style="font-family:'Bebas Neue',sans-serif;font-size:42px;color:${scoreColor};line-height:1;">${score5y.toFixed(2)}<span style="font-size:18px;color:#90a4ae;">/5</span></div>
-          <div style="font-size:9px;font-weight:700;color:${scoreColor};margin-top:2px;">Computed Multibagger Score</div>
-          <div style="font-size:8px;color:#78909c;margin-top:3px;font-family:'JetBrains Mono',monospace;">= Base5Y ÷ CMP = ${scen&&d.current_price?X(scen.base5/d.current_price):'N/A'}</div>
-        </div>
-      </div>
-
-      <!-- Target prices -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:20px;">
-        ${[
-          {l:'2-Year Target (Base)',v:scen?R(scen.base2,0):'N/A',c:scoreColor},
-          {l:'5-Year Target (Base)',v:scen?R(scen.base5,0):'N/A',c:scoreColor},
-          {l:'DCF Fair Value',v:dcf?R(dcf.fairVal,0):'N/A',c:'#1565c0'},
-          {l:'Weighted Avg Fair Value',v:fv?R(fv,0):'N/A',c:'#6a1b9a'}
-        ].map(t=>`<div style="background:#f5f7fa;border-radius:8px;padding:10px;text-align:center;border-top:3px solid ${t.c};">
-          <div style="font-size:7px;font-weight:700;color:#90a4ae;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">${t.l}</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:${t.c};">${t.v}</div>
-        </div>`).join('')}
-      </div>
-
-      <!-- Key assumptions strip -->
-      <div style="background:#e8f5e9;border-radius:8px;padding:10px 14px;border-left:4px solid #4caf50;">
-        <div style="font-size:8px;font-weight:800;color:#1b5e20;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px;">Key Model Assumptions</div>
-        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;">
-          ${[
-            {l:'Growth Est.',v:Pc(d._g*100)+'/yr'},
-            {l:'WACC',v:(usedWACC*100).toFixed(0)+'%'},
-            {l:'Terminal g',v:(TERMINAL_G*100).toFixed(1)+'%'},
-            {l:'DCF Horizon',v:'10 Years'},
-            {l:'Margin of Safety',v:(MOS*100).toFixed(0)+'%'}
-          ].map(a=>`<div><div style="font-size:7px;font-weight:600;color:#2e7d32;">${a.l}</div><div style="font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:#1b5e20;">${a.v}</div></div>`).join('')}
-        </div>
-        <div style="font-size:8px;color:#2e7d32;margin-top:5px;">
-          Growth: Historical PAT CAGR of ${Pc(d.profit_cagr_3yr_pct)} regressed to ${Pc(d._g*100)}/yr (×0.55 factor, hard-capped at 35%). All valuation math computed locally in browser using standard financial models.
-        </div>
-      </div>
-
-      <!-- Confidence + composite -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;">
-        <div style="background:#f5f7fa;border-radius:8px;padding:10px;">
-          <div style="font-size:8px;font-weight:700;color:#90a4ae;text-transform:uppercase;margin-bottom:4px;">Analyst Confidence</div>
-          <span style="background:${conf==='HIGH'?'#e8f5e9':conf==='MEDIUM'?'#fff3e0':'#ffebee'};color:${conf==='HIGH'?'#1b5e20':conf==='MEDIUM'?'#e65100':'#c62828'};padding:4px 12px;border-radius:6px;font-size:10px;font-weight:800;">${conf}</span>
-          <div style="font-size:8px;color:#78909c;margin-top:4px;">Composite Score: ${sc.composite.toFixed(0)}/100</div>
-        </div>
-        <div style="background:#f5f7fa;border-radius:8px;padding:10px;">
-          <div style="font-size:8px;font-weight:700;color:#90a4ae;text-transform:uppercase;margin-bottom:4px;">Multibagger Checklist</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;color:${passCount>=8?'#1b5e20':passCount>=6?'#e65100':'#c62828'};">${passCount}/10 <span style="font-size:9px;font-family:'Space Grotesk',sans-serif;font-weight:600;"> criteria passed</span></div>
-        </div>
-      </div>
+    <div style="text-align:right">
+      <div style="font-size:8px;color:${PDF_MUT}">Report date</div>
+      <div style="font-size:10px;font-weight:700">${genDate}</div>
+      <div style="font-size:8px;color:${PDF_MUT};margin-top:4px">Price as of ${esc(d.price_as_of)||genDate}</div>
     </div>
   </div>
 
-  <!-- ══════════════════════════════════════════════ -->
-  <!-- PAGE 2: EXECUTIVE SUMMARY + CHECKLIST         -->
-  <!-- ══════════════════════════════════════════════ -->
-  <div class="page page-break">
-    <div style="background:#1a237e;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="color:white;font-size:12px;font-weight:800;letter-spacing:0.05em;">EXECUTIVE SUMMARY &amp; QUALIFICATION CHECKLIST</div>
-      <div style="color:rgba(255,255,255,0.6);font-size:8px;font-family:'JetBrains Mono',monospace;">${esc(d.ticker)||'—'} · MultibaggerAI</div>
-    </div>
-    <div style="padding:16px 20px;">
-
-      ${SH('📊','Composite Quality Scores','#1a237e')}
-      <div class="g4" style="margin-bottom:14px;">
-        ${[
-          {l:'Financial Quality',v:sc.fScore,c:'#2e7d32',d:'Revenue/Profit CAGR, ROE, ROCE, Margins, Debt'},
-          {l:'Valuation Attractiveness',v:sc.vScore,c:'#1565c0',d:'P/E vs Sector, PEG Ratio, P/B vs Sector'},
-          {l:'Management & Governance',v:sc.mScore,c:'#6a1b9a',d:'Promoter Holding, Pledge %, Track Record'},
-          {l:'Sector & Tailwinds',v:sc.tScore,c:'#e65100',d:'Sector Score, Govt Support, Scalability'}
-        ].map(s=>`<div style="${KBX()}border-top:3px solid ${s.c};text-align:center;">
-          <div style="${KLBL}">${s.l}</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${s.c};">${s.v.toFixed(0)}</div>
-          <div style="font-size:7px;color:#78909c;margin-top:3px;">${s.d}</div>
-          <div style="height:4px;background:#e0e0e0;border-radius:2px;margin-top:6px;overflow:hidden;"><div style="height:100%;background:${s.c};width:${s.v.toFixed(0)}%;border-radius:2px;"></div></div>
-        </div>`).join('')}
+  <div style="display:flex;gap:12px;align-items:stretch;margin-bottom:12px">
+    <div style="flex:1;border:2px solid ${ratingTone};border-radius:10px;padding:13px 16px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
+        <span style="background:${ratingTone};color:#fff;font-size:13px;font-weight:800;padding:5px 15px;border-radius:7px">${rating}</span>
+        <span style="font-size:9px;color:${PDF_INK2}">Confidence: <strong>${conf}</strong> · Quality score <strong>${sc.composite.toFixed(0)}/100</strong> · Checklist <strong>${passCount}/10</strong></span>
       </div>
-      <div style="background:#e8f5e9;border-radius:8px;padding:8px 12px;margin-bottom:14px;text-align:center;">
-        <span style="font-size:11px;font-weight:800;color:#1b5e20;">Weighted Composite Score: ${sc.composite.toFixed(1)}/100</span>
-        <span style="font-size:8px;color:#2e7d32;margin-left:8px;">(Financial×40% + Valuation×25% + Management×20% + Tailwinds×15%)</span>
-      </div>
-
-      ${SH('✅','Multibagger Qualification Checklist — Threshold Based','#2e7d32')}
-      <table style="margin-bottom:14px;">
-        <thead><tr><th style="${TH}">Criterion</th><th style="${TH}">Data</th><th style="${TH}">Criterion</th><th style="${TH}">Data</th></tr></thead>
-        <tbody>${clRows}</tbody>
-        <tfoot><tr><td colspan="4" style="padding:8px 10px;background:#f5f7fa;font-size:8px;font-weight:700;color:#1b5e20;text-align:center;">
-          ${passCount}/10 criteria met — ${passCount>=8?'Strong Multibagger Profile 🚀':passCount>=6?'Good Candidate 📈':passCount>=4?'Moderate Potential ⚖️':'Weak Profile ⚠️'}
-        </td></tr></tfoot>
-      </table>
-
-      ${SH('🎯','Scenario Analysis — 5-Year Price Projections','#e65100')}
-      <div class="g3" style="margin-bottom:10px;">
-        ${scen&&d.current_price?[
-          {l:'Bear Case (Growth×0.45)',v:R(scen.bear5,0),x:X(scen.bear5/d.current_price),pe:scen.bPE.toFixed(1),bg:'#ffebee',c:'#c62828',bd:'#ef9a9a'},
-          {l:'Base Case (Expected)',v:R(scen.base5,0),x:X(scen.base5/d.current_price),pe:scen.bsPE.toFixed(1),bg:'#fff3e0',c:'#e65100',bd:'#ffcc80'},
-          {l:'Bull Case (Growth×1.35)',v:R(scen.bull5,0),x:X(scen.bull5/d.current_price),pe:scen.buPE.toFixed(1),bg:'#e8f5e9',c:'#2e7d32',bd:'#a5d6a7'}
-        ].map(s=>`<div style="background:${s.bg};border:1px solid ${s.bd};border-radius:8px;padding:12px;text-align:center;">
-          <div style="font-size:8px;font-weight:700;color:${s.c};text-transform:uppercase;margin-bottom:6px;">${s.l}</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;color:${s.c};">${s.v}</div>
-          <div style="font-size:8px;color:${s.c};margin-top:4px;">${s.x} return · Exit PE ${s.pe}x</div>
-        </div>`).join(''):'<td colspan="3" style="text-align:center;color:#90a4ae;">EPS data unavailable</td>'}
-      </div>
-      <div style="background:#f5f7fa;border-radius:6px;padding:8px 12px;font-size:8px;color:#546e7a;">
-        Bear: Growth × 0.45, P/E contracts 20% · Base: Expected growth, P/E mean-reverts 40% toward sector avg · Bull: Growth × 1.35, P/E expands to sector avg
-      </div>
+      <p style="font-size:9.5px">${verdictWords}</p>
+      ${capBlock}
     </div>
   </div>
 
-  <!-- ══════════════════════════════════════════════ -->
-  <!-- PAGE 3: SECTOR-SPECIFIC ANALYSIS                -->
-  <!-- ══════════════════════════════════════════════ -->
-  <div class="page page-break">
-    <div style="background:${cfg.primaryColor||ratingColor};padding:10px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="color:white;font-size:12px;font-weight:800;letter-spacing:0.05em;">${cfg.icon} ${cfg.name.toUpperCase()} — SECTOR-SPECIFIC ANALYSIS</div>
-      <div style="color:rgba(255,255,255,0.6);font-size:8px;font-family:'JetBrains Mono',monospace;">${esc(d.ticker)||'—'} · MultibaggerAI</div>
-    </div>
-    <div style="padding:16px 20px;">
+  <div class="g4" style="margin-bottom:12px">
+    ${pdfTile("Today's price", pdfINR(cmp))}
+    ${pdfTile('5-yr base target', scen?pdfINR(scen.base5):'N/A', scen&&cmp?`${(scen.base5/cmp).toFixed(2)}× today’s price`:'' )}
+    ${pdfTile('Fair value (blended)', fv?pdfINR(fv):'N/A', fv&&cmp?(cmp<fv?'price is below fair value':'price is above fair value'):'', fv&&cmp?(cmp<fv?'good':'warn'):undefined)}
+    ${pdfTile('Market cap', d.market_cap_cr?('₹'+pdfNum(d.market_cap_cr)+' Cr'):'N/A')}
+  </div>
 
-      <div style="background:${cfg.primaryColor||'#1a237e'}10;border-left:4px solid ${cfg.primaryColor||'#1a237e'};border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:8.5px;color:#37474f;line-height:1.7;">
-        <strong style="color:${cfg.primaryColor||'#1a237e'}">Sector Context — ${cfg.name}:</strong> ${cfg.note}
-      </div>
+  <p style="font-size:8px;color:${PDF_MUT};border:1px solid ${PDF_GRID};border-radius:6px;padding:6px 10px">
+    How this report works: an AI researched the raw numbers from public sources${d._provenance&&d._provenance.fields&&d._provenance.fields.length?` (${d._provenance.fields.length} core figures independently verified via ${d._provenance.sources.join(' + ')})`:' (structured feed unavailable — figures are AI-sourced; verify before acting)'}; every calculation, score and rating was then computed by fixed formulas in your browser. No opinion is generated by AI.
+  </p>
 
-      ${SH(cfg.icon,'Key Sector Metrics',cfg.primaryColor||'#1a237e')}
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;">
-        ${cfg.metrics.map(m=>{
-          const raw = d.sd[m.id];
-          const disp = raw==null?'N/A':(typeof raw==='boolean'?(raw?'✓ Yes':'✗ No'):raw.toLocaleString()+m.unit);
-          const scored = raw==null||typeof raw==='boolean'?50: m.hi
-            ? Math.max(0,Math.min(100,(raw-m.lo)/(m.hi_v-m.lo)*100))
-            : Math.max(0,Math.min(100,(m.hi_v-raw)/(m.hi_v-m.lo)*100));
-          const barC = scored>70?'#2e7d32':scored>45?'#e65100':'#c62828';
-          const valC = typeof raw==='boolean'?(raw?'#2e7d32':'#c62828'):barC;
-          return `<div style="${KBX()}border-top:2px solid ${barC};">
-            <div style="${KLBL}">${m.lbl}</div>
-            <div style="font-family:JetBrains Mono,monospace;font-size:13px;font-weight:700;color:${valC};">${disp}</div>
-            ${typeof raw!=='boolean'&&raw!=null?`<div style="height:4px;background:#e0e0e0;border-radius:2px;margin-top:4px;overflow:hidden;"><div style="height:100%;background:${barC};width:${scored.toFixed(0)}%;border-radius:2px;"></div></div>`:''}
-            <div style="font-size:7px;color:#90a4ae;margin-top:3px;">${m.desc}</div>
-          </div>`;
-        }).join('')}
-      </div>
+  <!-- ══ 1. VALUATION ══ -->
+  <div class="pgbrk"></div>
+  ${pdfSection(1,'What is the share actually worth?','Four independent methods, each answering the question differently. When several point the same way, the signal is stronger than any one of them.')}
+  ${pdfValueChart(modelRows, cmp)}
+  <table style="margin-top:10px;margin-bottom:10px">
+    <tr><th style="width:150px">Method</th><th>What it means in plain words</th><th style="width:70px">Fair value</th></tr>
+    ${modelRows.map(m=>`<tr><td style="font-weight:700;color:${PDF_INK}">${m.nm}</td><td>${m.why}</td><td style="font-weight:700;color:${PDF_INK}">${m.val!=null?pdfINR(m.val):'N/A'}</td></tr>`).join('')}
+    <tr><td style="font-weight:800;color:${PDF_INK}">Blended fair value</td><td>Weighted mix ${d.business_type==='BANKING_NBFC'?'(banks: price-to-book 60% + Graham 25% + Lynch 15%)':'(DCF 40% + Lynch 25% + EV/EBITDA 20% + Graham 15%)'}</td><td style="font-weight:800;color:${PDF_INK}">${fv?pdfINR(fv):'N/A'}</td></tr>
+  </table>
+  ${revWords?`<p><strong>The expectations test.</strong> ${revWords}</p>`:''}
+  ${decomp?`<p><strong>Where would the return come from?</strong> Of the projected base-case gain, about <strong>${(Math.max(0,Math.min(1,decomp.epsShare))*100).toFixed(0)}%</strong> comes from profits actually growing and <strong>${(Math.max(0,Math.min(1,decomp.reShare))*100).toFixed(0)}%</strong> from hoping the market pays a richer multiple. ${decomp.rerate>1.3?'That is a heavy reliance on market mood — riskier.':'Returns built on real profit growth are the durable kind.'}</p>`:''}
 
-      ${SH('✅',`${cfg.name} Qualification Checklist`,cfg.primaryColor||'#2e7d32')}
-      <table style="margin-bottom:14px;">
-        <thead><tr><th style="${TH}">Criterion</th><th style="${TH}">Data Point</th><th style="${TH}">Criterion</th><th style="${TH}">Data Point</th></tr></thead>
-        <tbody>
-          ${cl.slice(0,5).map((_,i)=>{
-            const L=cl[i], RR=cl[i+5];
-            return `<tr>
-              <td style="${TD}padding:6px 8px;"><span style="color:${L.pass?'#2e7d32':'#c62828'};font-size:11px;margin-right:5px;">${L.pass?'✓':'✗'}</span><span style="font-weight:${L.pass?'700':'400'};color:${L.pass?'#1b5e20':'#78909c'};">${L.lbl}</span></td>
-              <td style="${TDM}color:#546e7a;font-size:8px;">${L.sub}</td>
-              ${RR?`<td style="${TD}padding:6px 8px;"><span style="color:${RR.pass?'#2e7d32':'#c62828'};font-size:11px;margin-right:5px;">${RR.pass?'✓':'✗'}</span><span style="font-weight:${RR.pass?'700':'400'};color:${RR.pass?'#1b5e20':'#78909c'};">${RR.lbl}</span></td><td style="${TDM}color:#546e7a;font-size:8px;">${RR.sub}</td>`:'<td></td><td></td>'}
-            </tr>`;
-          }).join('')}
-        </tbody>
-        <tfoot><tr><td colspan="4" style="padding:8px 10px;background:#f5f7fa;font-size:8px;font-weight:700;color:${passCount>=8?'#1b5e20':passCount>=6?'#e65100':'#c62828'};text-align:center;">
-          ${passCount}/10 ${cfg.name} criteria met — ${passCount>=8?'Strong Profile 🚀':passCount>=6?'Good Candidate 📈':passCount>=4?'Moderate ⚖️':'Weak ⚠️'}
-        </td></tr></tfoot>
-      </table>
+  <!-- ══ 2. TRACK RECORD ══ -->
+  <div class="pgbrk"></div>
+  ${pdfSection(2,'Track record — has this business actually delivered?','Numbers from the last five financial years. A company that has already done it is a safer bet than one that promises to.')}
+  <div class="g2" style="margin-bottom:10px">
+    ${pdfBarPanel('Revenue (₹ Cr)','Total sales per financial year', h.years||[], h.revenue_cr||[]) || '<div style="font-size:8.5px;color:'+PDF_MUT+'">5-year revenue history not available.</div>'}
+    ${pdfBarPanel('Net profit (₹ Cr)','Profit after tax per financial year', h.years||[], h.pat_cr||[]) || ''}
+  </div>
+  <div class="g2" style="margin-bottom:10px">
+    ${pdfBarPanel('Operating margin (%)','Paise of operating profit per ₹1 of sales', h.years||[], h.opm_pct||[], {color:PDF_AQUA, fmt:v=>v.toFixed(1)+'%'}) || ''}
+    ${pdfBarPanel('Return on capital (%)','Efficiency of money employed in the business', h.years||[], h.roce_pct||[], {color:PDF_AQUA, fmt:v=>v.toFixed(1)+'%'}) || ''}
+  </div>
+  ${steadyWords?`<p>${steadyWords}</p>`:''}
+  ${(d.quarterly_results||[]).length?`
+  <table style="margin-top:4px">
+    <tr><th>Quarter</th><th>Revenue (Cr)</th><th>Profit (Cr)</th><th>Growth vs year ago</th><th>What happened</th></tr>
+    ${d.quarterly_results.map(q=>`<tr><td style="font-weight:700;color:${PDF_INK}">${esc(q.quarter)}</td><td>${q.revenue_cr!=null?pdfNum(q.revenue_cr):'N/A'}</td><td>${q.profit_cr!=null?pdfNum(q.profit_cr):'N/A'}</td><td style="color:${(q.yoy_growth_pct||0)>=0?PDF_GOODTXT:PDF_CRIT};font-weight:700">${q.yoy_growth_pct!=null?(q.yoy_growth_pct>=0?'+':'')+q.yoy_growth_pct.toFixed(1)+'%':'N/A'}</td><td>${esc(q.highlights)||'—'}</td></tr>`).join('')}
+  </table>`:''}
 
-      ${SH('📐','Growth & Valuation Assumptions (Sector-Adjusted)',cfg.primaryColor||'#1565c0')}
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px;">
-        ${[
-          {l:'Sector Type',   v:cfg.name},
-          {l:'Growth Regression',v:`${cfg.growthReg*100|0}% of hist.`},
-          {l:'Growth Cap',    v:Pc(cfg.maxGrowthCap*100)},
-          {l:'Proj. Growth',  v:Pc(d._g*100)+'/yr'},
-          {l:'Sector WACC',   v:(usedWACC*100).toFixed(0)+'%'}
-        ].map(k=>`<div style="${KBX()}border-top:2px solid ${cfg.primaryColor||'#1a237e'};">
-          <div style="${KLBL}">${k.l}</div>
-          <div style="font-family:JetBrains Mono,monospace;font-size:11px;font-weight:700;color:${cfg.primaryColor||'#1a237e'};">${k.v}</div>
-        </div>`).join('')}
-      </div>
-      <div style="background:#f5f7fa;border-radius:6px;padding:10px 14px;font-size:8px;color:#546e7a;line-height:1.7;">
-        <strong>Why sector-specific growth regression?</strong> Different sectors have different mean-reversion speeds. IT services companies at ${cfg.growthReg*100|0}% regression sustain higher growth longer than cyclical mining companies. Historical 3Y PAT CAGR of ${Pc(d.profit_cagr_3yr_pct)} is regressed to a sustainable ${Pc(d._g*100)} per annum for 5-year projections. WACC of ${(usedWACC*100).toFixed(0)}% reflects the risk profile of ${cfg.name} businesses. Terminal growth of ${(TERMINAL_G*100).toFixed(1)}% assumes long-run India GDP growth.
-      </div>
+  <!-- ══ 3. STABILITY ══ -->
+  <div class="pgbrk"></div>
+  ${pdfSection(3,'Stability — can it survive bad times?','Great returns mean nothing if the company cannot get through a rough patch. These checks look at debt, cash generation and accounting honesty.')}
+  <div class="g4" style="margin-bottom:10px">
+    ${pdfTile('Debt vs equity', d.debt_to_equity!=null?d.debt_to_equity.toFixed(2)+'×':'N/A', d.debt_to_equity!=null?(d.debt_to_equity<0.5?'low debt':d.debt_to_equity<1?'moderate':'high debt'):'', d.debt_to_equity!=null?(d.debt_to_equity<0.5?'good':d.debt_to_equity<1?'warn':'crit'):undefined)}
+    ${pdfTile('Interest cover', d.interest_coverage!=null?d.interest_coverage.toFixed(1)+'×':'N/A', 'profit ÷ interest bill', d.interest_coverage!=null?(d.interest_coverage>5?'good':d.interest_coverage>2?'warn':'crit'):undefined)}
+    ${pdfTile('Current ratio', d.current_ratio!=null?d.current_ratio.toFixed(2)+'×':'N/A', 'short-term assets vs bills', d.current_ratio!=null?(d.current_ratio>1.5?'good':d.current_ratio>1?'warn':'crit'):undefined)}
+    ${pdfTile('Promoter pledge', pdfPct(d.promoter_pledge_pct), 'shares pledged as loan collateral', d.promoter_pledge_pct!=null?(d.promoter_pledge_pct<5?'good':d.promoter_pledge_pct<15?'warn':'crit'):undefined)}
+  </div>
+  ${stabilityWords?`<p>${stabilityWords}</p>`:''}
+  <div class="g3" style="margin-bottom:10px">
+    ${pdfTile('Piotroski health check',
+        fscore&&fscore.na?'N/A for banks':fscore?`${fscore.score}/${fscore.max}`:'insufficient data',
+        fscore&&!fscore.na&&fscore.score!=null?'9 simple pass/fail tests of improving fundamentals':'',
+        fscore&&!fscore.na&&fscore.score!=null?(fscore.score>=7?'good':fscore.score>=4?'warn':'crit'):undefined)}
+    ${pdfTile('Bankruptcy risk (Altman Z)',
+        altman&&altman.na?'N/A for banks':altman?altman.Z.toFixed(2)+' — '+altman.zone:'insufficient data',
+        altman&&!altman.na&&altman.Z!=null?'above 2.6 = safe zone; below 1.1 = distress':'',
+        altman&&!altman.na&&altman.Z!=null?(altman.zone==='Safe'?'good':altman.zone==='Grey'?'warn':'crit'):undefined)}
+    ${pdfTile('Accounting red flags (Beneish M)',
+        beneish&&beneish.M!=null?beneish.M.toFixed(2)+(beneish.flag?' — flag raised':' — clean'):'insufficient data',
+        beneish&&beneish.M!=null?'statistical screen for manipulated earnings':'',
+        beneish&&beneish.M!=null?(beneish.flag?'crit':'good'):undefined)}
+  </div>
+  ${fscore&&!fscore.na&&fscore.tests?`
+  <table style="margin-bottom:10px">
+    <tr><th>Health check</th><th style="width:56px">Result</th><th>Health check</th><th style="width:56px">Result</th></tr>
+    ${(()=>{const t=fscore.tests;const half=Math.ceil(t.length/2);let rows='';for(let i=0;i<half;i++){const a=t[i],b=t[i+half];rows+=`<tr><td>${a.lbl}</td><td style="font-weight:800;color:${a.pass?PDF_GOODTXT:PDF_CRIT}">${a.pass?'✓ Pass':'✕ Fail'}</td><td>${b?b.lbl:''}</td><td style="font-weight:800;color:${b?(b.pass?PDF_GOODTXT:PDF_CRIT):'inherit'}">${b?(b.pass?'✓ Pass':'✕ Fail'):''}</td></tr>`;}return rows;})()}
+  </table>`:''}
+  <div class="g2">
+    ${shHold}
+    <div style="border:1px solid ${PDF_GRID};border-radius:8px;padding:10px 13px;background:#fff">
+      <div style="font-size:9.5px;font-weight:800;margin-bottom:5px">Why ownership matters</div>
+      <p style="font-size:8.5px">${d.promoter_holding_pct!=null?`Promoters hold <strong>${pdfPct(d.promoter_holding_pct)}</strong> — ${d.promoter_holding_pct>50?'a controlling stake, meaning the people running the company have most of their own wealth riding on it.':'less than half, so watch whether their stake rises (confidence) or keeps falling (caution).'}`:'Promoter holding data was unavailable.'} ${d.fii_holding_pct!=null?`Foreign institutions hold ${pdfPct(d.fii_holding_pct)} and domestic funds ${pdfPct(d.dii_holding_pct)} — institutional presence adds scrutiny and liquidity.`:''}</p>
     </div>
   </div>
 
-  <!-- PAGE 3→4: VALUATION DEEP DIVE                   -->
-  <!-- ══════════════════════════════════════════════ -->
-  <div class="page page-break">
-    <div style="background:#1565c0;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="color:white;font-size:12px;font-weight:800;letter-spacing:0.05em;">VALUATION ANALYSIS — MULTI-MODEL</div>
-      <div style="color:rgba(255,255,255,0.6);font-size:8px;font-family:'JetBrains Mono',monospace;">${esc(d.ticker)||'—'} · MultibaggerAI</div>
-    </div>
-    <div style="padding:16px 20px;">
+  <!-- ══ 4. FUTURE PROSPECTS ══ -->
+  <div class="pgbrk"></div>
+  ${pdfSection(4,'Future prospects — where could this go?','The growth assumption behind every number in this report, the sector’s runway, and what the company itself is building.')}
+  <p><strong>Our growth assumption, honestly explained.</strong> ${growthWords}</p>
+  <div class="g4" style="margin-bottom:10px">
+    ${pdfTile('Sector market size (now)', esc(d.sector_detail?.market_size_current)||'N/A')}
+    ${pdfTile('Expected by 2030', esc(d.sector_detail?.market_size_2030)||'N/A')}
+    ${pdfTile('Sector growth rate', esc(d.sector_detail?.cagr_forecast_text)||'N/A')}
+    ${pdfTile('Sector life stage', esc(d.sector_detail?.sector_stage)||'N/A', 'growth-stage sectors lift all competent players')}
+  </div>
+  ${d.sector_detail?.commentary?`<p><strong>Sector outlook.</strong> ${esc(d.sector_detail.commentary)}</p>`:''}
+  ${(d.business_overview?.future_plans||[]).length?`
+  <div style="border:1px solid ${PDF_GRID};border-radius:8px;padding:10px 13px;margin-bottom:10px;background:#fff">
+    <div style="font-size:9.5px;font-weight:800;margin-bottom:5px">What the company says it will build</div>
+    ${d.business_overview.future_plans.map(p=>`<div style="font-size:8.5px;color:${PDF_INK2};margin-bottom:3px;padding-left:12px;position:relative"><span style="position:absolute;left:0;color:${PDF_BLUE};font-weight:800">→</span>${esc(p)}</div>`).join('')}
+    ${d.business_overview.capacity_expansion?`<div style="font-size:8.5px;color:${PDF_INK2};margin-top:5px"><strong>Capacity:</strong> ${esc(d.business_overview.capacity_expansion)}</div>`:''}
+    ${d.business_overview.order_book?`<div style="font-size:8.5px;color:${PDF_INK2};margin-top:3px"><strong>Order book:</strong> ${esc(d.business_overview.order_book)} — orders already won are future revenue you can almost see.</div>`:''}
+  </div>`:''}
+  ${(A.key_catalysts||[]).length?`<p><strong>Catalysts to watch:</strong> ${A.key_catalysts.map(c=>esc(c)).join(' · ')}</p>`:''}
+  <p><strong>Recent news, weighed.</strong> ${newsWords}</p>
+  <div style="margin:12px 0 4px;font-size:9.5px;font-weight:800">Three futures for the share price (5-year view)</div>
+  ${pdfRangeStrip(scen,cmp)}
+  ${scenWords?`<p style="margin-top:8px">${scenWords}</p>`:''}
 
-      ${SH('⚖️','Four-Model Valuation Comparison','#1565c0')}
-      <table style="margin-bottom:12px;">
-        <thead><tr>
-          <th style="${TH}">Valuation Model</th>
-          <th style="${TH}">Weight</th>
-          <th style="${TH}">Fair Value</th>
-          <th style="${TH}">vs CMP (${R(d.current_price,0)})</th>
-          <th style="${TH}">Signal</th>
-        </tr></thead>
-        <tbody>${modelRows}</tbody>
-        <tfoot><tr style="background:#e8eaf6;">
-          <td style="${TD}font-weight:800;color:#1a237e;" colspan="2">Weighted Average (40/25/15/20)</td>
-          <td style="${TDM}font-weight:800;color:#1a237e;font-size:11px;">${fv?R(fv,0):'N/A'}</td>
-          <td style="${TDM}font-weight:700;color:${fv&&d.current_price?(fv>d.current_price?'#2e7d32':'#c62828'):'#546e7a'};">${fv&&d.current_price?((fv>d.current_price?'+':'')+((fv/d.current_price-1)*100).toFixed(1)+'%'):'N/A'}</td>
-          <td style="${TD}font-weight:700;color:${fv&&d.current_price?(fv>d.current_price?'#2e7d32':'#c62828'):'#546e7a'};">${fv&&d.current_price?(fv>d.current_price?'↑ Undervalued':'↓ Overvalued'):'—'}</td>
-        </tr></tfoot>
-      </table>
+  <!-- ══ 5. RISKS ══ -->
+  <div class="pgbrk"></div>
+  ${pdfSection(5,'What could go wrong','No investment is risk-free. These are the specific ways this thesis could fail, and what softens each blow.')}
+  ${(d.risks||[]).length?`
+  <table style="margin-bottom:10px">
+    <tr><th style="width:64px">Severity</th><th style="width:170px">Risk</th><th>What softens it</th></tr>
+    ${d.risks.map(r=>{const sv=(r.severity||'').toLowerCase();const c=sv==='high'?PDF_CRIT:sv==='medium'?'#a36f00':PDF_GOODTXT;return `<tr><td style="font-weight:800;color:${c}">${sv==='high'?'●●● High':sv==='medium'?'●●○ Med':'●○○ Low'}</td><td style="font-weight:700;color:${PDF_INK}">${esc(r.factor)}</td><td>${esc(r.mitigation)}</td></tr>`;}).join('')}
+  </table>`:'<p>No specific risks were returned — treat that as missing data, not absence of risk.</p>'}
+  <div style="border:1px solid ${PDF_GRID};border-radius:8px;padding:10px 13px;margin-bottom:12px;background:#fff">
+    <div style="font-size:9.5px;font-weight:800;margin-bottom:4px">What would change our view</div>
+    <p style="font-size:8.5px;margin-bottom:0">${[
+      cl.filter(x=>!x.pass).length?`The company currently fails ${cl.filter(x=>!x.pass).length} of 10 sector checklist items (${cl.filter(x=>!x.pass).slice(0,3).map(x=>x.lbl).join('; ')}${cl.filter(x=>!x.pass).length>3?'; …':''}) — clearing these would strengthen the thesis.`:'The company passes the full sector checklist — deterioration in any item would be the first warning.',
+      caps&&caps.length?'Resolving the guardrail warnings on page 1 would lift the rating cap.':'',
+      'A material fall in promoter holding, a spike in pledging, or margin decline across two consecutive quarters would each warrant a re-run of this analysis.'
+    ].filter(Boolean).join(' ')}</p>
+  </div>
 
-      <div style="background:#e3f2fd;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:8px;color:#1565c0;border-left:4px solid #2196f3;">
-        <strong>Graham:</strong> √(22.5 × EPS × BVPS) = √(22.5 × ${(d.eps_ttm||0).toFixed(2)} × ${(d.book_value_per_share||0).toFixed(2)}) = <strong>${graham?R(graham,0):'N/A'}</strong> &nbsp;&nbsp;
-        <strong>Lynch:</strong> EPS × Growth% = ${(d.eps_ttm||0).toFixed(2)} × ${Math.min((d._g||0)*100,40).toFixed(1)} = <strong>${lynch?R(lynch,0):'N/A'}</strong> &nbsp;&nbsp;
-        <strong>PEG:</strong> P/E ÷ PAT_CAGR = ${(d.pe_ratio||0).toFixed(1)} ÷ ${(d.profit_cagr_3yr_pct||0).toFixed(1)} = <strong>${peg?peg.toFixed(2):'N/A'}</strong>${peg?' ('+( peg<1?'Bargain':peg<1.5?'Fair':peg<2?'Slightly Rich':'Expensive')+')':''}
-      </div>
-
-      ${SH('📐','DCF Year-by-Year Breakdown (10-Year, 3-Phase)','#00695c')}
-      <div style="background:#e8f5e9;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:8px;color:#1b5e20;">
-        WACC: ${(usedWACC*100).toFixed(0)}%  ·  High Growth Phase (yr 1-5): ${Pc(d._g*100)}/yr  ·  Transition (yr 6-10): Linearly decays → ${(TERMINAL_G*100).toFixed(1)}%  ·  Exit PE: ${dcf?.exitPE.toFixed(1)||'N/A'}x  ·  Margin of Safety: ${(MOS*100).toFixed(0)}%
-      </div>
-      <table>
-        <thead><tr>
-          <th style="${TH}">Year</th><th style="${TH}">Phase</th><th style="${TH}">Growth</th>
-          <th style="${TH}">EPS</th><th style="${TH}">PV Factor</th>
-          <th style="${TH}" style="color:#2e7d32;">Disc. EPS</th><th style="${TH}" style="color:#1565c0;">Cumul. PV</th>
-        </tr></thead>
-        <tbody>
-          ${dcfTableRows}
-          <tr style="background:#fff3e0;">
-            <td colspan="4" style="${TD}font-weight:700;color:#e65100;">Terminal Value (Exit PE: ${dcf?.exitPE.toFixed(1)||'N/A'}x) — ${dcf?(dcf.termPV/dcf.cumPV*100).toFixed(0)+'% of Total':'N/A'}</td>
-            <td colspan="3" style="${TDM}font-weight:700;color:#e65100;">${dcf?R(dcf.termPV,0):'N/A'}</td>
-          </tr>
-          <tr style="background:#e8f5e9;">
-            <td colspan="4" style="${TD}font-weight:800;color:#1b5e20;">Intrinsic Value (Pre-MoS)</td>
-            <td colspan="3" style="${TDM}font-weight:800;color:#1b5e20;">${dcf?R(dcf.cumPV,0):'N/A'}</td>
-          </tr>
-          <tr style="background:#e8f5e9;">
-            <td colspan="4" style="${TD}font-weight:800;color:#1b5e20;">DCF Fair Value (10% Margin of Safety)</td>
-            <td colspan="3" style="${TDM}font-weight:800;color:#1b5e20;font-size:11px;">${dcf?R(dcf.fairVal,0):'N/A'}</td>
-          </tr>
-        </tbody>
-      </table>
+  <div style="border-top:2px solid ${PDF_INK};padding-top:8px">
+    <div style="font-size:8px;color:${PDF_MUT};line-height:1.6">
+      <strong style="color:${PDF_INK2}">Method:</strong> growth = 3-yr CAGR regressed by sector factor, blended with retention × ROE · discount rate ${(d._wacc*100).toFixed(1)}% ${waccObj?'(CAPM)':'(sector default)'} · terminal growth ${(TERMINAL_G*100).toFixed(1)}% · 10% margin of safety on DCF · engine: ${esc(d._engineLabel)||'AI + local computation'}.
+      <br><strong style="color:${PDF_INK2}">Disclaimer:</strong> This report is generated by software for education and research. It is not investment advice, and the authors hold no SEBI registration. Figures may contain errors — verify independently before investing. Markets can fall as well as rise; never invest money you cannot afford to lose.
+      <br>Generated ${genDate} · ${name} (${tick}) · MultibaggerAI
     </div>
   </div>
 
-  <!-- ══════════════════════════════════════════════ -->
-  <!-- PAGE 4: FINANCIAL HEALTH                      -->
-  <!-- ══════════════════════════════════════════════ -->
-  <div class="page page-break">
-    <div style="background:#4a148c;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="color:white;font-size:12px;font-weight:800;letter-spacing:0.05em;">FINANCIAL HEALTH &amp; QUARTERLY RESULTS</div>
-      <div style="color:rgba(255,255,255,0.6);font-size:8px;font-family:'JetBrains Mono',monospace;">${esc(d.ticker)||'—'} · MultibaggerAI</div>
-    </div>
-    <div style="padding:16px 20px;">
+</div>
+<scr${''}ipt>
+  // Auto-open the print dialog once fonts/layout settle; the button stays as fallback.
+  window.addEventListener('load', function(){ setTimeout(function(){ try{ window.print(); }catch(e){} }, 350); });
+</scr${''}ipt>
+</body></html>`;
+}
 
-      ${SH('📈','Growth Metrics','#2e7d32')}
-      <div class="g5" style="margin-bottom:14px;">
-        ${[
-          {l:'Rev CAGR (3Y)',v:Pc(d.revenue_cagr_3yr_pct),c:d.revenue_cagr_3yr_pct>20?'#1b5e20':'#e65100'},
-          {l:'PAT CAGR (3Y)',v:Pc(d.profit_cagr_3yr_pct),c:d.profit_cagr_3yr_pct>20?'#1b5e20':'#e65100'},
-          {l:'EPS CAGR (3Y)',v:Pc(d.eps_cagr_3yr_pct),c:d.eps_cagr_3yr_pct>20?'#1b5e20':'#e65100'},
-          {l:'Fwd EPS (5Y)',v:fwdEPS5?R(fwdEPS5,1):'N/A',c:'#1565c0'},
-          {l:'Proj. Growth',v:Pc(d._g*100),c:'#6a1b9a'}
-        ].map(k=>`<div style="${KBX()}border-top:2px solid ${k.c};">
-          <div style="${KLBL}">${k.l}</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:${k.c};">${k.v}</div>
-        </div>`).join('')}
-      </div>
-
-      ${SH('💰','Profitability & Returns','#1565c0')}
-      <div class="g4" style="margin-bottom:14px;">
-        ${[
-          {l:'Operating Margin',v:Pc(d.operating_margin_pct),c:d.operating_margin_pct>15?'#1b5e20':'#e65100'},
-          {l:'Net Margin',v:Pc(d.net_margin_pct),c:d.net_margin_pct>10?'#1b5e20':'#e65100'},
-          {l:'ROE',v:Pc(d.roe_pct),c:d.roe_pct>20?'#1b5e20':'#e65100'},
-          {l:'ROCE',v:Pc(d.roce_pct),c:d.roce_pct>20?'#1b5e20':'#e65100'}
-        ].map(k=>`<div style="${KBX()}border-top:2px solid ${k.c};">
-          <div style="${KLBL}">${k.l}</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:${k.c};">${k.v}</div>
-        </div>`).join('')}
-      </div>
-
-      ${SH('🏦','Balance Sheet & Valuation Multiples','#4a148c')}
-      <div class="g4" style="margin-bottom:14px;">
-        ${[
-          {l:'Debt / Equity',v:d.debt_to_equity!=null?d.debt_to_equity.toFixed(2)+'x':'N/A',c:d.debt_to_equity<0.5?'#1b5e20':d.debt_to_equity<1?'#e65100':'#c62828'},
-          {l:'Current Ratio',v:d.current_ratio!=null?d.current_ratio.toFixed(2)+'x':'N/A',c:d.current_ratio>1.5?'#1b5e20':'#c62828'},
-          {l:'Int. Coverage',v:d.interest_coverage!=null?d.interest_coverage.toFixed(1)+'x':'N/A',c:d.interest_coverage>5?'#1b5e20':'#c62828'},
-          {l:'PEG Ratio',v:peg?peg.toFixed(2):'N/A',c:peg&&peg<1.5?'#1b5e20':peg&&peg<2?'#e65100':'#c62828'},
-          {l:'P/E Ratio',v:d.pe_ratio?.toFixed(1)||'N/A',c:'#1a237e'},
-          {l:'Sector P/E',v:d.sector_pe_avg?.toFixed(1)||'N/A',c:'#546e7a'},
-          {l:'P/B Ratio',v:d.pb_ratio?.toFixed(2)||'N/A',c:'#1a237e'},
-          {l:'EV/EBITDA',v:d.ev_ebitda?.toFixed(1)||'N/A',c:'#1a237e'}
-        ].map(k=>`<div style="${KBX()}">
-          <div style="${KLBL}">${k.l}</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:${k.c};">${k.v}</div>
-        </div>`).join('')}
-      </div>
-
-      ${SH('📅','Quarterly Performance','#e65100')}
-      <table>
-        <thead><tr>
-          <th style="${TH}">Quarter</th><th style="${TH}">Revenue (Cr)</th><th style="${TH}">PAT (Cr)</th>
-          <th style="${TH}">YoY Growth</th><th style="${TH}">PAT Margin</th><th style="${TH}">Highlights</th>
-        </tr></thead>
-        <tbody>${qRows||'<tr><td colspan="6" style="padding:12px;text-align:center;color:#90a4ae;">No quarterly data available</td></tr>'}</tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ══════════════════════════════════════════════ -->
-  <!-- PAGE 5: BUSINESS & MANAGEMENT                 -->
-  <!-- ══════════════════════════════════════════════ -->
-  <div class="page page-break">
-    <div style="background:#00695c;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="color:white;font-size:12px;font-weight:800;letter-spacing:0.05em;">BUSINESS OVERVIEW &amp; MANAGEMENT</div>
-      <div style="color:rgba(255,255,255,0.6);font-size:8px;font-family:'JetBrains Mono',monospace;">${esc(d.ticker)||'—'} · MultibaggerAI</div>
-    </div>
-    <div style="padding:16px 20px;">
-
-      ${SH('🏢','Business Overview','#00695c')}
-      <p style="font-size:9px;line-height:1.7;color:#37474f;margin-bottom:10px;">${esc(d.business_overview?.description)||'—'}</p>
-      <div class="g2" style="margin-bottom:12px;">
-        <div>
-          <div style="font-size:8px;font-weight:700;color:#90a4ae;text-transform:uppercase;margin-bottom:6px;">Revenue Model</div>
-          <div style="font-size:9px;color:#37474f;background:#f5f7fa;padding:8px;border-radius:6px;">${esc(d.business_overview?.revenue_model)||'—'}</div>
-        </div>
-        ${d.business_overview?.order_book?`<div>
-          <div style="font-size:8px;font-weight:700;color:#2e7d32;text-transform:uppercase;margin-bottom:6px;">Order Book / Backlog</div>
-          <div style="font-size:11px;font-weight:700;color:#1b5e20;background:#e8f5e9;padding:8px;border-radius:6px;border-left:3px solid #4caf50;">${esc(d.business_overview.order_book)}</div>
-        </div>`:''}
-      </div>
-      <div style="margin-bottom:12px;">
-        <div style="font-size:8px;font-weight:700;color:#90a4ae;text-transform:uppercase;margin-bottom:6px;">Future Growth Plans</div>
-        ${futurePlans}
-      </div>
-      ${d.business_overview?.capacity_expansion?`<div style="background:#e8f5e9;border-radius:6px;padding:8px 12px;margin-bottom:12px;border-left:3px solid #4caf50;">
-        <div style="font-size:7px;font-weight:700;color:#2e7d32;text-transform:uppercase;margin-bottom:3px;">Capacity Expansion Plan</div>
-        <div style="font-size:9px;color:#1b5e20;">${esc(d.business_overview.capacity_expansion)}</div>
-      </div>`:''}
-      <div style="margin-bottom:14px;">
-        <div style="font-size:8px;font-weight:700;color:#90a4ae;text-transform:uppercase;margin-bottom:6px;">Key Products &amp; Services</div>
-        <div style="display:flex;flex-wrap:wrap;gap:5px;">
-          ${(d.business_overview?.key_products||[]).map(p=>`<span style="background:#e3f2fd;color:#1565c0;padding:3px 10px;border-radius:99px;font-size:8px;font-weight:600;">${esc(p)}</span>`).join('')}
-        </div>
-      </div>
-
-      ${SH('👥','Management & Governance','#1565c0')}
-      <div class="g4" style="margin-bottom:12px;">
-        <div style="${KBX('#e8f5e9','#a5d6a7')}border-top:2px solid #4caf50;text-align:center;">
-          <div style="${KLBL}">Promoter Holding</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#1b5e20;">${Pc(d.promoter_holding_pct)}</div>
-        </div>
-        <div style="${KBX((d.promoter_pledge_pct||0)>10?'#ffebee':'#f5f7fa',(d.promoter_pledge_pct||0)>10?'#ef9a9a':'#e0e0e0')}border-top:2px solid ${(d.promoter_pledge_pct||0)>10?'#c62828':'#4caf50'};text-align:center;">
-          <div style="${KLBL}">Pledge %</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:${(d.promoter_pledge_pct||0)>10?'#c62828':'#2e7d32'};">${Pc(d.promoter_pledge_pct)}</div>
-        </div>
-        <div style="${KBX()}text-align:center;">
-          <div style="${KLBL}">FII Holding</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#1565c0;">${Pc(d.fii_holding_pct)}</div>
-        </div>
-        <div style="${KBX()}text-align:center;">
-          <div style="${KLBL}">DII Holding</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#37474f;">${Pc(d.dii_holding_pct)}</div>
-        </div>
-      </div>
-      <div class="g2">
-        <div>
-          <div style="font-size:8px;font-weight:700;color:#90a4ae;text-transform:uppercase;margin-bottom:6px;">Key Personnel</div>
-          ${(d.management_profile?.key_persons||[]).map(p=>`<div style="font-size:9px;color:#37474f;margin-bottom:4px;display:flex;align-items:center;gap:5px;"><span style="color:#1565c0;font-size:10px;">→</span>${esc(p)}</div>`).join('')}
-        </div>
-        <div>
-          <div style="font-size:8px;font-weight:700;color:#90a4ae;text-transform:uppercase;margin-bottom:6px;">Management Track Record Score</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:${(d.management_track_record_score||0)>70?'#1b5e20':'#e65100'};">${d.management_track_record_score||'N/A'}<span style="font-size:11px;color:#90a4ae;">/100</span></div>
-          <div style="height:6px;background:#e0e0e0;border-radius:3px;overflow:hidden;margin-top:5px;"><div style="height:100%;background:${(d.management_track_record_score||0)>70?'#4caf50':'#ff9800'};width:${d.management_track_record_score||0}%;border-radius:3px;"></div></div>
-        </div>
-      </div>
-      ${d.management_profile?.commentary?`<div style="background:#f5f7fa;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:9px;color:#546e7a;border-left:3px solid #90a4ae;">${esc(d.management_profile.commentary)}</div>`:''}
-    </div>
-  </div>
-
-  <!-- ══════════════════════════════════════════════ -->
-  <!-- PAGE 6: SECTOR, GOVERNMENT & COMPETITIVE      -->
-  <!-- ══════════════════════════════════════════════ -->
-  <div class="page page-break">
-    <div style="background:#e65100;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="color:white;font-size:12px;font-weight:800;letter-spacing:0.05em;">SECTOR · GOVERNMENT · COMPETITIVE ANALYSIS</div>
-      <div style="color:rgba(255,255,255,0.6);font-size:8px;font-family:'JetBrains Mono',monospace;">${esc(d.ticker)||'—'} · MultibaggerAI</div>
-    </div>
-    <div style="padding:16px 20px;">
-
-      ${SH('🏭','Sector Analysis','#e65100')}
-      <div class="g4" style="margin-bottom:10px;">
-        ${[
-          {l:'Market Size (Now)',v:esc(d.sector_detail?.market_size_current)||'N/A',c:'#1565c0'},
-          {l:'Market Size (2030)',v:esc(d.sector_detail?.market_size_2030)||'N/A',c:'#1b5e20'},
-          {l:'Sector CAGR',v:esc(d.sector_detail?.cagr_forecast_text)||'N/A',c:'#1b5e20'},
-          {l:'Sector Stage',v:esc(d.sector_detail?.sector_stage)||'N/A',c:'#e65100'}
-        ].map(k=>`<div style="${KBX()}"><div style="${KLBL}">${k.l}</div><div style="font-size:11px;font-weight:700;color:${k.c};">${k.v}</div></div>`).join('')}
-      </div>
-      <div style="margin-bottom:10px;">
-        <div style="font-size:8px;font-weight:700;color:#90a4ae;text-transform:uppercase;margin-bottom:5px;">Mega Trends</div>
-        <div style="display:flex;flex-wrap:wrap;gap:5px;">
-          ${(d.sector_detail?.mega_trends||[]).map(t=>`<span style="background:#ede7f6;color:#4a148c;padding:3px 10px;border-radius:99px;font-size:8px;font-weight:600;">${esc(t)}</span>`).join('')}
-        </div>
-      </div>
-      ${d.sector_detail?.commentary?`<div style="font-size:9px;color:#37474f;background:#f5f7fa;padding:8px 12px;border-radius:6px;margin-bottom:12px;border-left:3px solid #ff9800;">${esc(d.sector_detail.commentary)}</div>`:''}
-
-      ${SH('🏛️','Government Policy & Tailwinds','#2e7d32')}
-      ${govSchemes}
-      ${d.government_support_detail?.policy_commentary?`<div style="font-size:9px;color:#1b5e20;background:#e8f5e9;padding:8px 12px;border-radius:6px;margin-top:8px;margin-bottom:12px;border-left:3px solid #4caf50;">${esc(d.government_support_detail.policy_commentary)}</div>`:''}
-      ${d.government_support_detail?.budget_allocation?`<div style="background:#e8f5e9;border-radius:6px;padding:8px 12px;margin-bottom:12px;">
-        <div style="font-size:7px;font-weight:700;color:#2e7d32;text-transform:uppercase;margin-bottom:3px;">Budget / Policy Target</div>
-        <div style="font-size:9px;font-weight:700;color:#1b5e20;">${esc(d.government_support_detail.budget_allocation)}</div>
-      </div>`:''}
-
-      ${SH('♟️','Competitive Landscape','#1a237e')}
-      <table style="margin-bottom:12px;">
-        <thead><tr>
-          <th style="${TH}">Company</th><th style="${TH}">Ticker</th>
-          <th style="${TH}">Mkt Cap (Cr)</th><th style="${TH}">P/E</th>
-          <th style="${TH}">Rev. Growth</th><th style="${TH}">Key Strength</th>
-        </tr></thead>
-        <tbody>${compRows||'<tr><td colspan="6" style="text-align:center;padding:12px;color:#90a4ae;">No competitor data</td></tr>'}</tbody>
-      </table>
-
-      ${SH('🛡️','Competitive Moat','#00695c')}
-      <div class="g2">
-        <div>
-          <div style="font-size:8px;font-weight:700;color:#90a4ae;text-transform:uppercase;margin-bottom:5px;">Moat Type</div>
-          <div style="font-size:12px;font-weight:700;color:#00695c;margin-bottom:8px;">${esc(d.moat_type)||'N/A'}</div>
-          <div style="font-size:8px;font-weight:700;color:#90a4ae;text-transform:uppercase;margin-bottom:4px;">Competitive Position Score</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;color:#00695c;">${d.competitive_position_score||'N/A'}<span style="font-size:9px;color:#90a4ae;">/100</span></div>
-          <div style="height:5px;background:#e0e0e0;border-radius:3px;overflow:hidden;margin-top:4px;"><div style="height:100%;background:#00897b;width:${d.competitive_position_score||0}%;border-radius:3px;"></div></div>
-        </div>
-        <div style="background:#e0f2f1;border-radius:6px;padding:10px;font-size:9px;color:#004d40;border-left:3px solid #4db6ac;">
-          ${esc(d.competitive_moat_text)||'Competitive moat assessment not available.'}
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ══════════════════════════════════════════════ -->
-  <!-- ══════════════════════════════════════════════ -->
-  <!-- PAGE 7: NEWS IMPACT & ADVANCED ANALYSIS          -->
-  <!-- ══════════════════════════════════════════════ -->
-  <div class="page page-break">
-    <div style="background:#1565c0;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="color:white;font-size:12px;font-weight:800;letter-spacing:0.05em;">RECENT NEWS IMPACT &amp; ADVANCED ANALYSIS</div>
-      <div style="color:rgba(255,255,255,0.6);font-size:8px;font-family:'JetBrains Mono',monospace;">${esc(d.ticker)||'—'} · MultibaggerAI</div>
-    </div>
-    <div style="padding:16px 20px;">
-
-      ${decomp ? `
-      <div style="font-size:11px;font-weight:800;color:#37474f;margin-bottom:6px;">WHAT DRIVES THE ${decomp.total.toFixed(2)}× BASE-CASE 5-YEAR RETURN?</div>
-      <div style="display:flex;height:22px;border-radius:5px;overflow:hidden;border:1px solid #e0e0e0;margin-bottom:5px;">
-        <div style="width:${Math.max(0,Math.min(100,decomp.epsShare*100))}%;background:#00897b;color:#fff;font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center;">${(decomp.epsShare*100).toFixed(0)}%</div>
-        <div style="width:${Math.max(0,Math.min(100,decomp.reShare*100))}%;background:#f9a825;color:#000;font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center;">${(decomp.reShare*100).toFixed(0)}%</div>
-      </div>
-      <div style="font-size:9px;color:#546e7a;margin-bottom:14px;">
-        <span style="color:#00897b;font-weight:700;">&#9632; Earnings growth ${decomp.epsMult.toFixed(2)}&times;</span> (${Pc(decomp.g*100)}/yr) &nbsp;&middot;&nbsp;
-        <span style="color:#e65100;font-weight:700;">&#9632; P/E re-rating ${decomp.rerate.toFixed(2)}&times;</span> (${decomp.curPE.toFixed(1)}&rarr;${decomp.exitPE.toFixed(1)})${decomp.rerate>1.3?' &nbsp;&mdash; leans on multiple expansion (higher risk)':''}
-      </div>` : ''}
-
-      <div class="g2" style="margin-bottom:14px;">
-        <div style="border:1px solid #e0e0e0;border-radius:8px;padding:10px 12px;">
-          <div style="font-size:9px;font-weight:800;color:#1565c0;margin-bottom:6px;">REVERSE DCF &mdash; GROWTH PRICED IN</div>
-          ${revDCF&&revDCF.na ? `<div style="font-size:9px;color:#90a4ae;">Not applicable to banks/NBFCs.</div>`
-            : revDCF ? `<div style="font-size:9px;color:#37474f;line-height:1.7;">Price implies <strong style="color:#c62828;">${(revDCF.implied*100).toFixed(1)}%/yr</strong> vs sustainable <strong style="color:#1565c0;">${(revDCF.sustainable*100).toFixed(1)}%/yr</strong>.<br>${revDCF.verdict}</div>`
-            : `<div style="font-size:9px;color:#90a4ae;">Insufficient data (needs positive EPS &amp; price).</div>`}
-        </div>
-        <div style="border:1px solid #e0e0e0;border-radius:8px;padding:10px 12px;">
-          <div style="font-size:9px;font-weight:800;color:#00695c;margin-bottom:6px;">PIOTROSKI F-SCORE</div>
-          ${fscore&&fscore.na ? `<div style="font-size:9px;color:#90a4ae;">Not applicable to banks/NBFCs.</div>`
-            : fscore ? `<div style="font-size:16px;font-weight:800;color:${fscore.score>=7?'#00695c':fscore.score>=4?'#e65100':'#c62828'};margin-bottom:3px;">${fscore.score}/${fscore.max} <span style="font-size:9px;color:#546e7a;font-weight:600;">${fscore.score>=7?'Strong':fscore.score>=4?'Moderate':'Weak'}</span></div>${fscore.tests.map(t=>`<div style="font-size:8px;color:${t.pass?'#37474f':'#b0bec5'};line-height:1.5;">${t.pass?'&#10003;':'&#10007;'} ${t.lbl}</div>`).join('')}`
-            : `<div style="font-size:9px;color:#90a4ae;">Prior-year data not returned &mdash; re-run or use a stronger model.</div>`}
-        </div>
-      </div>
-
-      <div style="font-size:11px;font-weight:800;color:#37474f;margin-bottom:6px;">RECENT NEWS &amp; IMPACT ON THESIS</div>
-      ${!news ? `<div style="font-size:9px;color:#90a4ae;margin-bottom:10px;">No recent news was returned for this stock.</div>` : `
-      <div class="g2" style="margin-bottom:8px;">
-        <div style="border:1px solid #e0e0e0;border-radius:6px;padding:8px 10px;">
-          <div style="font-size:8px;font-weight:800;color:#546e7a;">SHORT-TERM (1&ndash;3 MONTHS)</div>
-          <div style="font-size:11px;font-weight:800;color:${/pos/i.test((d.news_impact_assessment&&d.news_impact_assessment.short_term&&d.news_impact_assessment.short_term.outlook)||news.shortLbl)?'#00695c':/neg/i.test((d.news_impact_assessment&&d.news_impact_assessment.short_term&&d.news_impact_assessment.short_term.outlook)||news.shortLbl)?'#c62828':'#e65100'};">${esc((d.news_impact_assessment&&d.news_impact_assessment.short_term&&d.news_impact_assessment.short_term.outlook))||news.shortLbl}${news.shortScore!=null?` (${news.shortScore>0?'+':''}${news.shortScore})`:''}</div>
-          <div style="font-size:8px;color:#546e7a;line-height:1.5;">${esc(d.news_impact_assessment&&d.news_impact_assessment.short_term&&d.news_impact_assessment.short_term.rationale)||''}</div>
-        </div>
-        <div style="border:1px solid #e0e0e0;border-radius:6px;padding:8px 10px;">
-          <div style="font-size:8px;font-weight:800;color:#546e7a;">LONG-TERM (MULTI-YEAR)</div>
-          <div style="font-size:11px;font-weight:800;color:${/pos/i.test((d.news_impact_assessment&&d.news_impact_assessment.long_term&&d.news_impact_assessment.long_term.outlook)||news.longLbl)?'#00695c':/neg/i.test((d.news_impact_assessment&&d.news_impact_assessment.long_term&&d.news_impact_assessment.long_term.outlook)||news.longLbl)?'#c62828':'#e65100'};">${esc((d.news_impact_assessment&&d.news_impact_assessment.long_term&&d.news_impact_assessment.long_term.outlook))||news.longLbl}${news.longScore!=null?` (${news.longScore>0?'+':''}${news.longScore})`:''}</div>
-          <div style="font-size:8px;color:#546e7a;line-height:1.5;">${esc(d.news_impact_assessment&&d.news_impact_assessment.long_term&&d.news_impact_assessment.long_term.rationale)||''}</div>
-        </div>
-      </div>
-      <div style="font-size:9px;color:#37474f;background:#f5f7fa;border:1px solid #e0e0e0;border-left:3px solid ${news.aTone==='g'?'#00897b':news.aTone==='r'?'#c62828':'#e65100'};border-radius:6px;padding:7px 10px;margin-bottom:10px;"><strong>Rating ${rating} vs news:</strong> ${news.alignment}</div>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-        <tr style="background:#eceff1;"><th style="font-size:7px;text-align:left;padding:4px 6px;color:#546e7a;">DATE</th><th style="font-size:7px;text-align:left;padding:4px 6px;color:#546e7a;">HEADLINE</th><th style="font-size:7px;text-align:left;padding:4px 6px;color:#546e7a;">IMPACT/HORIZON</th><th style="font-size:7px;text-align:left;padding:4px 6px;color:#546e7a;">EFFECT ON THESIS</th></tr>
-        ${news.items.map(n=>{const sc=/pos/i.test(n.sentiment)?'#00695c':/neg/i.test(n.sentiment)?'#c62828':'#e65100';return `<tr style="border-bottom:1px solid #eeeeee;"><td style="font-size:8px;padding:4px 6px;color:#90a4ae;">${esc(n.date)||''}</td><td style="font-size:8px;padding:4px 6px;color:#263238;font-weight:600;">${esc(n.headline)||''}</td><td style="font-size:7px;padding:4px 6px;color:${sc};font-weight:700;">${esc(n.impact)||'—'} / ${esc(n.horizon)||'—'}</td><td style="font-size:8px;padding:4px 6px;color:#546e7a;">${esc(n.effect)||''}</td></tr>`;}).join('')}
-      </table>`}
-
-      ${d.news_impact_assessment&&d.news_impact_assessment.thesis_impact?`<div style="font-size:9px;color:#546e7a;line-height:1.6;"><strong style="color:#263238;">Net thesis impact:</strong> ${esc(d.news_impact_assessment.thesis_impact)}</div>`:''}
-    </div>
-  </div>
-
-  <!-- ══════════════════════════════════════════════ -->
-  <!-- PAGE 7: RISK FACTORS & DISCLAIMER             -->
-  <!-- ══════════════════════════════════════════════ -->
-  <div class="page page-break">
-    <div style="background:#c62828;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="color:white;font-size:12px;font-weight:800;letter-spacing:0.05em;">RISK FACTORS &amp; INVESTMENT CONCLUSION</div>
-      <div style="color:rgba(255,255,255,0.6);font-size:8px;font-family:'JetBrains Mono',monospace;">${esc(d.ticker)||'—'} · MultibaggerAI</div>
-    </div>
-    <div style="padding:16px 20px;">
-
-      ${SH('⚠️','Key Risk Factors','#c62828')}
-      <table style="margin-bottom:16px;">
-        <thead><tr><th style="${TH}width:70px;">Severity</th><th style="${TH}">Risk Factor</th><th style="${TH}">Mitigation / Context</th></tr></thead>
-        <tbody>${riskRows||'<tr><td colspan="3" style="text-align:center;padding:12px;color:#90a4ae;">No risks data</td></tr>'}</tbody>
-      </table>
-
-      ${SH('🎯','Investment Conclusion','#1a237e')}
-      <div style="background:${ratingBg};border:2px solid ${ratingColor}40;border-radius:10px;padding:16px;margin-bottom:14px;">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-          <div style="background:${ratingColor};color:white;padding:8px 18px;border-radius:8px;font-size:14px;font-weight:800;">${rating}</div>
-          <div>
-            <div style="font-size:11px;font-weight:700;color:${ratingColor};">Multibagger Score: ${score5y.toFixed(2)}/5 · Confidence: ${conf}</div>
-            <div style="font-size:9px;color:#546e7a;margin-top:2px;">Composite Quality Score: ${sc.composite.toFixed(0)}/100 · Checklist: ${passCount}/10 passed</div>
-          </div>
-        </div>
-        ${ratingCaps && ratingCaps.length ? `
-        <div style="background:#fff3e0;border:1px solid #ffb74d;border-radius:6px;padding:8px 12px;margin-bottom:10px;">
-          <div style="font-size:8px;font-weight:800;color:#e65100;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;">Rating capped by guardrails</div>
-          ${ratingCaps.map(c=>`<div style="font-size:8px;color:#37474f;line-height:1.5;margin-bottom:2px;"><strong style="color:#e65100;">${c.from} &rarr; ${c.to}:</strong> ${c.why}</div>`).join('')}
-        </div>`:''}
-        <div class="g4" style="margin-bottom:10px;">
-          ${[
-            {l:'CMP',v:R(d.current_price,0),c:'#37474f'},
-            {l:'2Y Target (Base)',v:scen?R(scen.base2,0):'N/A',c:scoreColor},
-            {l:'5Y Target (Base)',v:scen?R(scen.base5,0):'N/A',c:scoreColor},
-            {l:'DCF Fair Value',v:dcf?R(dcf.fairVal,0):'N/A',c:'#1565c0'}
-          ].map(t=>`<div style="text-align:center;">
-            <div style="font-size:7px;font-weight:700;color:#90a4ae;text-transform:uppercase;margin-bottom:3px;">${t.l}</div>
-            <div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:${t.c};">${t.v}</div>
-          </div>`).join('')}
-        </div>
-        <div style="font-size:8px;color:#546e7a;border-top:1px solid ${ratingColor}20;padding-top:10px;line-height:1.7;">
-          <strong>Growth Assumption:</strong> Historical PAT CAGR ${Pc(d.profit_cagr_3yr_pct)} regressed to ${Pc(d._g*100)} per annum (${cfg.name} sector: ${cfg.growthReg*100|0}% regression factor, cap ${(cfg.maxGrowthCap*100).toFixed(0)}%).
-          WACC: ${(usedWACC*100).toFixed(0)}% · Terminal Growth: ${(TERMINAL_G*100).toFixed(1)}% · Exit PE: ${dcf?.exitPE.toFixed(1)||'N/A'}× · DCF Margin of Safety: ${(MOS*100).toFixed(0)}%.
-          Multibagger Score = Base-Case 5Y Price ÷ CMP = ${scen&&d.current_price?X(scen.base5/d.current_price):'N/A'}.
-        </div>
-      </div>
-
-      <!-- Disclaimer -->
-      <div style="background:#f5f7fa;border:1px solid #e0e0e0;border-radius:8px;padding:12px 14px;border-left:4px solid #ff9800;">
-        <div style="font-size:9px;font-weight:800;color:#e65100;margin-bottom:5px;">⚠️ IMPORTANT DISCLAIMER</div>
-        <div style="font-size:8px;color:#546e7a;line-height:1.7;">
-          This report is generated by <strong>MultibaggerAI</strong> for <strong>educational and research purposes only</strong>. It does not constitute financial advice, a buy/sell recommendation, or an invitation to invest.
-          All calculations use standard academic financial models (DCF, Graham Number, Peter Lynch, EV/EBITDA) with stated assumptions. Financial data is sourced from public web searches and may contain inaccuracies.
-          Growth projections are probability-weighted estimates under specific model assumptions — they are NOT guaranteed outcomes. Indian equity markets are subject to market risk, regulatory changes, and macroeconomic factors.
-          <strong>Past performance does not predict future returns.</strong> Please consult a SEBI-registered investment advisor before making any investment decisions. The authors of this tool bear no liability for investment losses.
-        </div>
-        <div style="font-size:7px;color:#90a4ae;margin-top:6px;border-top:1px solid #e0e0e0;padding-top:5px;">
-          Report generated on ${genDate} · ${esc(d.stock_name)||''} (${esc(d.ticker)||''}) · MultibaggerAI Precision Engine v2.0
-        </div>
-      </div>
-    </div>
-  </div>
-
-  `;
-
-  // ── Render & export PDF ──────────────────────────────
-  // html2canvas reliably captures elements at real on-screen coordinates but
-  // often returns BLANK for off-screen (left:-9999px) elements. So we render
-  // the report at (0,0) hidden behind a full-screen overlay, let layout settle,
-  // then capture. The user only ever sees the overlay.
-  if(typeof html2pdf === 'undefined'){
-    alert('The PDF library (html2pdf) did not load. It comes from a CDN, so check your internet connection, then reload the page and try again.');
-    if(btn){ btn.innerHTML='<i class="fas fa-file-pdf"></i> Download Full PDF Report'; btn.disabled=false; }
+function generatePDFReport(){
+  if(!rawData){ alert('Please run an analysis first.'); return; }
+  let html;
+  try{ html = buildPrintReport(rawData); }
+  catch(e){ alert('Could not build the report: '+e.message); return; }
+  const w = window.open('', '_blank');
+  if(!w){
+    alert('Your browser blocked the report pop-up. Please allow pop-ups for this page, then click the button again.');
     return;
   }
-
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(8,12,16,0.94);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#e0e8f0;font-family:sans-serif;';
-  overlay.innerHTML = '<div style="width:34px;height:34px;border:3px solid rgba(0,230,118,0.25);border-top-color:#00e676;border-radius:50%;animation:sp 0.7s linear infinite"></div><div style="font-size:15px;font-weight:600">Generating your PDF report…</div><div style="font-size:12px;color:#5a6a7a">This can take a few seconds — please don\'t close the tab.</div>';
-  document.body.appendChild(overlay);
-
-  const container = document.createElement('div');
-  container.style.cssText = 'position:absolute;left:0;top:0;width:210mm;background:#ffffff;z-index:1;';
-  container.innerHTML = reportHTML;
-  document.body.appendChild(container);
-
-  const prevScroll = window.scrollY;
-  window.scrollTo(0,0);
-
-  const opts = {
-    margin:     [8, 8, 8, 8],
-    filename:   `${(d.ticker||d.stock_name||'Stock').replace(/\s+/g,'_')}_MultibaggerAI_Report.pdf`,
-    image:      { type:'jpeg', quality:0.97 },
-    html2canvas:{ scale:2, useCORS:true, logging:false, letterRendering:true, backgroundColor:'#ffffff', scrollX:0, scrollY:0, windowWidth:794 },
-    jsPDF:      { unit:'mm', format:'a4', orientation:'portrait' },
-    pagebreak:  { mode:['css','legacy'], before:'.page-break' }
-  };
-
-  const cleanup = () => {
-    if(container.parentNode) container.parentNode.removeChild(container);
-    if(overlay.parentNode)   overlay.parentNode.removeChild(overlay);
-    window.scrollTo(0, prevScroll);
-  };
-
-  // Delay lets fonts + layout settle before capture (capturing too early = blank)
-  setTimeout(()=>{
-    html2pdf().set(opts).from(container).save().then(()=>{
-      cleanup();
-      if(btn){
-        btn.innerHTML='<i class="fas fa-check"></i> PDF Downloaded!';
-        btn.style.background='linear-gradient(135deg,#1565c0,#0d47a1)';
-        setTimeout(()=>{
-          btn.innerHTML='<i class="fas fa-file-pdf"></i> Download Full PDF Report';
-          btn.style.background='linear-gradient(135deg,#00c853,#00897b)';
-          btn.disabled=false;
-        }, 3000);
-      }
-    }).catch(err=>{
-      cleanup();
-      alert('PDF generation failed: '+err.message);
-      if(btn){ btn.innerHTML='<i class="fas fa-file-pdf"></i> Download Full PDF Report'; btn.disabled=false; }
-    });
-  }, 350);
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
 }
 
 // ════════════════════════════════════════════════════════
