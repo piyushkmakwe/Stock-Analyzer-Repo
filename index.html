@@ -3301,6 +3301,39 @@ async function loadLiveModels(){
   }catch(e){ status.textContent = '· could not load live list ('+e.message+')'; }
 }
 
+// Extract the first complete, parseable JSON object from an AI reply.
+// Models often wrap the JSON in ```fences``` or append commentary after it;
+// a greedy first-{-to-last-} regex breaks on any trailing text, so instead
+// scan with a brace-depth counter (string/escape aware) and try each
+// balanced candidate until one parses.
+function extractJSON(txt){
+  const s = txt.replace(/```json|```/g, '');
+  let start = s.indexOf('{');
+  while(start !== -1){
+    let depth = 0, inStr = false, escaped = false;
+    for(let i = start; i < s.length; i++){
+      const ch = s[i];
+      if(escaped){ escaped = false; continue; }
+      if(inStr){
+        if(ch === '\\') escaped = true;
+        else if(ch === '"') inStr = false;
+        continue;
+      }
+      if(ch === '"') inStr = true;
+      else if(ch === '{') depth++;
+      else if(ch === '}'){
+        depth--;
+        if(depth === 0){
+          try{ return JSON.parse(s.slice(start, i+1)); }
+          catch(_){ break; }   // malformed candidate — try the next '{'
+        }
+      }
+    }
+    start = s.indexOf('{', start + 1);
+  }
+  return null;
+}
+
 // Dispatch → returns the raw text reply from the chosen provider
 async function callAI(provider, key, model, userMsg){
   return provider==='gemini' ? callGemini(key, model, userMsg) : callClaude(key, model, userMsg);
@@ -3402,9 +3435,8 @@ async function analyze(){
     clearInterval(timer);
     for(let i=1;i<=6;i++){ const el=document.getElementById('s'+i); if(el){ el.classList.remove('active'); el.classList.add('done'); } }
 
-    const m = txt.match(/\{[\s\S]*\}/);
-    if(!m) throw new Error('Could not extract JSON from the AI response. The model may have returned an unexpected format — try again, or switch models.');
-    rawData = JSON.parse(m[0].replace(/```json|```/g,'').trim());
+    rawData = extractJSON(txt);
+    if(!rawData) throw new Error('Could not extract JSON from the AI response. The model may have returned an unexpected format — try again, or switch models.');
     rawData._engineLabel = `${cfg.label} · ${model}`;
     // ── 2. Verified numbers override the AI's — same stock, same result ──
     if(verified){
