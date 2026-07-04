@@ -1322,6 +1322,7 @@ function deriveRating(score5y, composite, d, guards){
         : score5y>=2.5 && composite>58 ? 'BUY'
         : score5y>=1.8 && composite>44 ? 'HOLD'
         : 'AVOID';
+  const base = r;                       // pre-guardrail decision, for the rationale trail
   const caps = [];
   const capTo = (max, why) => {
     if(RATING_ORDER.indexOf(r) > RATING_ORDER.indexOf(max)){
@@ -1348,7 +1349,88 @@ function deriveRating(score5y, composite, d, guards){
         capTo('BUY', 'Price is above the blended fair value of the valuation models — limited margin of safety at today’s level.');
     }
   }
-  return { r, caps };
+  return { r, caps, base };
+}
+
+// ── Rating rationale: the full decision trail behind the call ─────
+// Everything the verdict rests on, as data — which thresholds were tested
+// against which numbers, what the guardrails saw, and what would move the
+// rating up or down. Rendered in the report and (condensed) in the PDF so
+// no rating ever appears without its justification.
+const RATING_RULES = [ ['STRONG BUY',3.5,70], ['BUY',2.5,58], ['HOLD',1.8,44] ];
+function buildRatingRationale(d, x){
+  const { score5y, scen, sc, rating, base, caps, fv, revDCF, altman, beneish } = x;
+  const cmp = d.current_price;
+  const cfg = getSectorConfig(d);
+
+  // 1. Growth input — where the single most important number came from
+  const growth = {
+    histCagr: d.eps_cagr_3yr_pct ?? d.profit_cagr_3yr_pct,
+    reg: cfg.growthReg, gHist: d._gHist, gFund: d._gFund, g: d._g, capG: cfg.maxGrowthCap
+  };
+
+  // 2. The 5-yr score arithmetic
+  const target = (scen && cmp) ? { eps: d.eps_ttm, g: d._g, exitPE: scen.bsPE, base5: scen.base5, cmp, score: score5y } : null;
+
+  // 3. Composite build-up
+  const W = sc.weights || SCORE_WEIGHTS;
+  const pillars = [
+    ['Financial strength', sc.fScore, W.financial], ['Future growth', sc.gScore, W.growth],
+    ['Valuation', sc.vScore, W.valuation], ['Quality & market', sc.qScore, W.quality],
+    ['Management', sc.mScore, W.management], ['Policy & geo', sc.pScore, W.policy]
+  ].map(([name,score,w])=>({ name, score, w, contrib: score*w }));
+
+  // 4. Threshold tests — which band the numbers actually land in
+  const tests = RATING_RULES.map(([level, sMin, cMin]) => ({
+    level,
+    conds: [
+      { lbl:`5-yr return score ≥ ${sMin}`, ok: score5y>=sMin, val: score5y.toFixed(2) },
+      { lbl:`Composite > ${cMin}`,         ok: sc.composite>cMin, val: sc.composite.toFixed(0) }
+    ],
+    met: score5y>=sMin && sc.composite>cMin
+  }));
+
+  // 5. Guardrail audit — every safety screen, whether it fired or not
+  const fmt1=(v,dp=2)=>v==null?null:(+v).toFixed(dp);
+  const guardrails = [
+    { name:'Earnings-manipulation screen (Beneish M)',
+      status: beneish&&beneish.M!=null ? (beneish.flag?'fired':'passed') : 'no data',
+      detail: beneish&&beneish.M!=null ? `M = ${fmt1(beneish.M)} (flag above −1.78)` : 'needs 2 years of granular financials' },
+    { name:'Bankruptcy-risk screen (Altman Z)',
+      status: altman&&altman.na ? 'n/a for banks' : altman&&altman.Z!=null ? (altman.zone==='Distress'?'fired':altman.zone==='Grey'?'caution':'passed') : 'no data',
+      detail: altman&&altman.Z!=null ? `Z = ${fmt1(altman.Z)} → ${altman.zone} zone` : '' },
+    { name:'Expectations screen (reverse DCF)',
+      status: revDCF&&revDCF.na ? 'n/a for banks' : revDCF&&revDCF.implied!=null ? (revDCF.bounded==='above'||revDCF.implied>revDCF.sustainable*1.25?'fired':'passed') : 'no data',
+      detail: revDCF&&revDCF.implied!=null ? `price implies ${(revDCF.implied*100).toFixed(1)}%/yr vs sustainable ${(revDCF.sustainable*100).toFixed(1)}%/yr` : '' },
+    { name:'Margin-of-safety screen (price vs blended fair value)',
+      status: (fv&&cmp) ? (cmp>fv*1.25?'fired':cmp>fv?'caution':'passed') : 'no data',
+      detail: (fv&&cmp) ? `price ₹${cmp.toFixed(0)} vs fair value ₹${fv.toFixed(0)} (${((cmp/fv-1)*100).toFixed(0)>0?'+':''}${((cmp/fv-1)*100).toFixed(0)}%)` : '' }
+  ];
+
+  // 6. What would change the call
+  let up = null;
+  if(caps && caps.length){
+    up = `Clearing the guardrail issue${caps.length>1?'s':''} above would restore the pre-guardrail rating of ${base}.`;
+  } else {
+    const idx = RATING_RULES.findIndex(r0=>r0[0]===base);
+    if(idx > 0){
+      const [lvl, sMin, cMin] = RATING_RULES[idx-1];
+      const needs = [];
+      if(score5y < sMin && scen && cmp){
+        const neededTarget = sMin * cmp;
+        needs.push(`the base-case 5-yr target must reach ₹${neededTarget.toFixed(0)} (now ₹${scen.base5.toFixed(0)}) — i.e. faster verified growth or a cheaper entry price`);
+      }
+      if(sc.composite <= cMin) needs.push(`the composite score must exceed ${cMin} (now ${sc.composite.toFixed(0)})`);
+      if(needs.length) up = `For ${lvl}: ${needs.join('; ')}.`;
+    } else if(base==='AVOID'){
+      up = `For HOLD: the 5-yr return score must reach 1.8 (now ${score5y.toFixed(2)}) and the composite must exceed 44 (now ${sc.composite.toFixed(0)}).`;
+    }
+  }
+  const curIdx = RATING_RULES.findIndex(r0=>r0[0]===rating);
+  const down = rating==='AVOID' ? null :
+    `The call drops if the 5-yr score falls below ${RATING_RULES[curIdx]?RATING_RULES[curIdx][1]:1.8} or the composite below ${RATING_RULES[curIdx]?RATING_RULES[curIdx][2]:44} — or immediately if any guardrail fires (manipulation flag, distress zone, priced-for-perfection, price > 125% of fair value).`;
+
+  return { growth, target, pillars, tests, guardrails, up, down, base, rating, composite: sc.composite };
 }
 
 // ── Reverse DCF: what EPS growth does today's price already imply? ──
@@ -1654,10 +1736,12 @@ function renderReport(d){
   const beneish = calcBeneishM(d);
 
   const score5y = scen && d.current_price ? Math.min(5, Math.max(1, scen.base5 / d.current_price)) : 2.0;
-  const { r: rating, caps: ratingCaps } = deriveRating(score5y, sc.composite, d, { beneish, altman, revDCF, fv });
+  const { r: rating, caps: ratingCaps, base: ratingBase } = deriveRating(score5y, sc.composite, d, { beneish, altman, revDCF, fv });
   const dq      = validateDataConsistency(d);
   const confObj = deriveConfidence(d, dq, calcFVSpread([dcf?.fairVal, graham, lynch, ev]));
   const conf    = confObj.level;
+  const why     = rating==='INSUFFICIENT DATA' ? null
+                : buildRatingRationale(d, { score5y, scen, sc, rating, base: ratingBase, caps: ratingCaps, fv, revDCF, altman, beneish });
   const news = calcNewsImpact(d, rating);
   const fcfDCF  = calcFCFDCF(d, d._wacc);
   const trend   = calcTrendStats(d);
@@ -1902,6 +1986,66 @@ function renderReport(d){
         </div>
       </div>
     </div>
+
+    <!-- WHY THIS CALL — DECISION PATH -->
+    ${why ? `
+    <div class="card rs">
+      <div class="ch"><div class="ct"><i class="fas fa-scale-balanced" style="color:var(--g)"></i> Why ${why.rating}? — The Full Decision Path</div>
+        <span style="font-size:0.56rem;color:var(--m)">every number and threshold behind the call</span></div>
+      <div class="cb">
+
+        <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Step 1 · The growth estimate that everything rests on</div>
+        <div class="formula" style="margin-top:0;margin-bottom:12px">Historical: ${why.growth.histCagr!=null?pct(why.growth.histCagr):'n/a'} × sector fade ${why.growth.reg} = <span class="vl">${why.growth.gHist!=null?pct(why.growth.gHist*100):'n/a'}</span>${why.growth.gFund!=null?`
+Fundamental: retention × ROE = <span class="vl">${pct(why.growth.gFund*100)}</span>
+Blend of the two, capped at ${pct(why.growth.capG*100)} → <span class="vl">g = ${pct(why.growth.g*100)}/yr</span>`:`
+No fundamental cross-check available → <span class="vl">g = ${pct(why.growth.g*100)}/yr</span>`}</div>
+
+        ${why.target ? `
+        <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Step 2 · The 5-year return score</div>
+        <div class="formula" style="margin-top:0;margin-bottom:12px">EPS ${fmtINR(why.target.eps,2)} × (1+${(why.target.g*100).toFixed(1)}%)⁵ × exit P/E ${why.target.exitPE.toFixed(1)} = <span class="vl">${fmtINR(why.target.base5,0)}</span> base-case 5-yr target
+${fmtINR(why.target.base5,0)} ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="vl">score ${why.target.score.toFixed(2)}</span> <span class="cm">(1.0 = flat, 5.0 = 5-bagger)</span></div>` : ''}
+
+        <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Step 3 · The composite quality score</div>
+        <table class="dcf-t" style="margin-bottom:12px">
+          <tr><th>Pillar</th><th>Score /100</th><th>Weight</th><th>Contribution</th></tr>
+          ${why.pillars.map(p=>`<tr><td>${p.name}</td><td>${p.score.toFixed(0)}</td><td>${(p.w*100).toFixed(0)}%</td><td style="color:var(--g)">${p.contrib.toFixed(1)}</td></tr>`).join('')}
+          <tr class="totrow"><td>Composite</td><td colspan="2"></td><td>${why.composite.toFixed(1)}</td></tr>
+        </table>
+
+        <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Step 4 · Which rating band do those two numbers land in?</div>
+        <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:12px">
+          ${why.tests.map(t=>`
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 11px;border-radius:8px;background:${t.level===why.base?'var(--gb)':'var(--s2)'};border:1px solid ${t.level===why.base?'rgba(0,230,118,0.3)':'var(--b)'}">
+            <span style="font-size:0.62rem;font-weight:800;width:92px;color:${t.level===why.base?'var(--g)':'var(--m)'}">${t.level}${t.level===why.base?' ◄':''}</span>
+            ${t.conds.map(c=>`<span style="font-size:0.62rem;color:${c.ok?'var(--g)':'var(--r)'}"><i class="fas ${c.ok?'fa-check':'fa-xmark'}" style="font-size:0.55rem"></i> ${c.lbl} <span style="font-family:'JetBrains Mono',monospace">(${c.val})</span></span>`).join('<span style="color:var(--m2);font-size:0.6rem">AND</span>')}
+          </div>`).join('')}
+          ${why.base==='AVOID'?`<div style="font-size:0.64rem;color:var(--r);padding:0 4px">No band's conditions were met → pre-guardrail decision is AVOID.</div>`:''}
+        </div>
+
+        <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Step 5 · Guardrail audit ${why.base!==why.rating?`— capped ${why.base} → ${why.rating}`:'— none fired'}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:12px">
+          ${why.guardrails.map(g=>{
+            const c = g.status==='fired'?'var(--r)':g.status==='caution'?'var(--a)':g.status==='passed'?'var(--g)':'var(--m)';
+            const ic = g.status==='fired'?'fa-xmark':g.status==='caution'?'fa-triangle-exclamation':g.status==='passed'?'fa-check':'fa-minus';
+            return `<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 10px;border-radius:8px;background:var(--s2);border:1px solid var(--b)">
+              <i class="fas ${ic}" style="color:${c};font-size:0.66rem;margin-top:2px"></i>
+              <div><div style="font-size:0.64rem;font-weight:700;color:var(--t)">${g.name} — <span style="color:${c};text-transform:uppercase;font-size:0.56rem">${g.status}</span></div>
+              ${g.detail?`<div style="font-size:0.58rem;color:var(--m);font-family:'JetBrains Mono',monospace">${g.detail}</div>`:''}</div>
+            </div>`;}).join('')}
+        </div>
+
+        <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Step 6 · What would change this call</div>
+        ${why.up?`<div style="font-size:0.68rem;color:var(--t);line-height:1.6;margin-bottom:4px"><i class="fas fa-arrow-trend-up" style="color:var(--g);margin-right:5px"></i>${why.up}</div>`:''}
+        ${why.down?`<div style="font-size:0.68rem;color:var(--m);line-height:1.6"><i class="fas fa-arrow-trend-down" style="color:var(--r);margin-right:5px"></i>${why.down}</div>`:''}
+
+        <details style="margin-top:12px">
+          <summary><i class="fas fa-chevron-right"></i> Every algorithm used in this analysis</summary>
+          <div style="margin-top:9px;font-size:0.64rem;color:var(--m);line-height:1.8">
+            <strong style="color:var(--t)">Growth:</strong> g = blend( 3-yr CAGR × sector fade factor, retention × ROE ), capped per sector · <strong style="color:var(--t)">DCF:</strong> 3-phase 10-yr EPS discounting at ${(d._wacc*100).toFixed(1)}% (CAPM when beta known, else sector WACC), years 6–10 decay linearly to terminal ${(TERMINAL_G*100).toFixed(1)}%, exit P/E = sector avg × 0.7 clamped 12–28, minus ${(MOS*100).toFixed(0)}% margin of safety · <strong style="color:var(--t)">Graham:</strong> √(22.5 × EPS × BVPS) · <strong style="color:var(--t)">Lynch:</strong> EPS × growth% (P/E capped 40) · <strong style="color:var(--t)">EV/EBITDA:</strong> (EBITDA × sector multiple − debt + cash) ÷ shares · <strong style="color:var(--t)">Blend:</strong> ${d.business_type==='BANKING_NBFC'?'P/B 60% + Graham 25% + Lynch 15% (banks)':'DCF 40% + Lynch 25% + EV/EBITDA 20% + Graham 15%'} · <strong style="color:var(--t)">Scenarios:</strong> bear/base/bull = growth ×0.45 / ×1 / ×1.35 with exit P/Es 0.8×current / drift 40% to sector / sector avg · <strong style="color:var(--t)">Composite:</strong> Financial 30% + Future Growth 25% + Valuation 20% + Quality 10% + Management 10% + Policy 5% · <strong style="color:var(--t)">Forensics:</strong> Piotroski 9-test F-score, Altman Z″ (emerging-market coefficients), Beneish 8-ratio M-score · <strong style="color:var(--t)">Reverse DCF:</strong> bisection for the growth rate that makes intrinsic value equal today's price · <strong style="color:var(--t)">Confidence:</strong> verified-field coverage + 15 cross-field consistency checks + completeness + model dispersion.
+          </div>
+        </details>
+      </div>
+    </div>` : ''}
 
     <!-- ACCURACY / REALITY CHECK -->
     <div class="card rs">
@@ -2653,10 +2797,12 @@ function buildPrintReport(d){
   const cl=buildChecklist(d,peg), sc=calcScores(d,peg);
   const revDCF=calcReverseDCF(d), altman=calcAltmanZ(d), beneish=calcBeneishM(d);
   const score5y = scen&&d.current_price ? Math.min(5,Math.max(1,scen.base5/d.current_price)) : 2.0;
-  const {r:rating,caps} = deriveRating(score5y,sc.composite,d,{beneish,altman,revDCF,fv});
+  const {r:rating,caps,base:ratingBase} = deriveRating(score5y,sc.composite,d,{beneish,altman,revDCF,fv});
   const dq = validateDataConsistency(d);
   const confObj = deriveConfidence(d, dq, calcFVSpread([dcf?.fairVal,graham,lynch,ev]));
   const conf = confObj.level;
+  const why = rating==='INSUFFICIENT DATA' ? null
+            : buildRatingRationale(d, { score5y, scen, sc, rating, base: ratingBase, caps, fv, revDCF, altman, beneish });
   const fscore=calcPiotroski(d), decomp=calcReturnDecomp(d,scen), news=calcNewsImpact(d,rating), trend=calcTrendStats(d);
   const passCount=cl.filter(x=>x.pass).length;
   const cmp=d.current_price;
@@ -2783,6 +2929,19 @@ function buildPrintReport(d){
       </div>
       <p style="font-size:9.5px">${verdictWords}</p>
       ${capBlock}
+      ${why?`
+      <div style="border-top:1px solid ${PDF_GRID};margin-top:10px;padding-top:9px">
+        <div style="font-size:9px;font-weight:800;color:${PDF_INK};margin-bottom:5px">Why ${why.rating}, exactly — the decision trail</div>
+        <div style="font-size:8.5px;color:${PDF_INK2};line-height:1.65">
+          <strong>1.</strong> Growth assumption: ${why.growth.histCagr!=null?`historical ${pdfPct(why.growth.histCagr)}/yr faded by the sector factor (×${why.growth.reg})`:'sector default'}${why.growth.gFund!=null?`, cross-checked against self-funded growth (retention × ROE = ${pdfPct(why.growth.gFund*100)})`:''} → <strong>${pdfPct(why.growth.g*100)}/yr</strong>.<br>
+          ${why.target?`<strong>2.</strong> 5-yr score: EPS ${pdfINR(why.target.eps,2)} × (1+${(why.target.g*100).toFixed(1)}%)⁵ × exit P/E ${why.target.exitPE.toFixed(1)} = ${pdfINR(why.target.base5)} target; ÷ price ${pdfINR(why.target.cmp)} = <strong>score ${why.target.score.toFixed(2)}</strong>.<br>`:''}
+          <strong>3.</strong> Composite quality: ${why.pillars.map(p=>`${p.name} ${p.score.toFixed(0)}×${(p.w*100).toFixed(0)}%`).join(' + ')} = <strong>${why.composite.toFixed(0)}/100</strong>.<br>
+          <strong>4.</strong> Band test: ${why.base} requires ${why.base==='AVOID'?'— no band was met (HOLD needs score ≥ 1.8 and composite > 44)':`score ≥ ${(RATING_RULES.find(r=>r[0]===why.base)||[])[1]} <strong>(${score5y.toFixed(2)} ${score5y>=((RATING_RULES.find(r=>r[0]===why.base)||[])[1]||0)?'✓':'✗'})</strong> and composite > ${(RATING_RULES.find(r=>r[0]===why.base)||[])[2]} <strong>(${sc.composite.toFixed(0)} ✓)</strong>`}.<br>
+          <strong>5.</strong> Guardrails: ${why.guardrails.map(g=>`${g.name.replace(/\s*\(.*\)/,'')} <strong style="color:${g.status==='fired'?PDF_CRIT:g.status==='caution'?'#a36f00':g.status==='passed'?PDF_GOODTXT:PDF_MUT}">${g.status}</strong>`).join(' · ')}${why.base!==why.rating?` — <strong style="color:#a36f00">rating capped ${why.base} → ${why.rating}</strong>`:''}.<br>
+          ${why.up?`<strong>Upgrade path:</strong> ${why.up}<br>`:''}
+          ${why.down?`<strong>Downgrade trigger:</strong> ${why.down}`:''}
+        </div>
+      </div>`:''}
     </div>
   </div>
 
