@@ -1182,6 +1182,120 @@ function calcScores(d, peg){
   return { fScore, gScore, vScore, qScore, mScore, pScore, tScore:pScore, composite, weights:w };
 }
 
+// ── Data consistency validator ───────────────────────────
+// The AI's answers contain redundancy: price÷EPS should equal the P/E it
+// claims, the CAGR it claims should be derivable from the history it also
+// returns, the forensic inputs should tie to the headline figures. Every
+// mismatch is proof of a hallucination somewhere — surface it instead of
+// silently computing on it.
+function validateDataConsistency(d){
+  const checks = [];
+  const add = (name, ok, severity, detail) => checks.push({ name, ok: !!ok, severity, detail });
+  const within = (a, b, tol) => a!=null && b!=null && b!==0 && Math.abs(a/b - 1) <= tol;
+  const h = d.financial_history || {};
+  const histLast = arr => { const a=(arr||[]).filter(x=>x!=null); return a.length? a[a.length-1] : null; };
+  const histCagr = (arr, yrs) => {
+    const a=(arr||[]).filter(x=>x!=null&&x>0);
+    if(a.length < yrs+1) return null;
+    return (Math.pow(a[a.length-1]/a[a.length-1-yrs], 1/yrs)-1)*100;
+  };
+
+  // 1-3: price / multiple identities
+  if(d.current_price && d.eps_ttm>0 && d.pe_ratio)
+    add('P/E ↔ Price÷EPS', within(d.current_price/d.eps_ttm, d.pe_ratio, 0.12), 'fail',
+        `price÷EPS = ${(d.current_price/d.eps_ttm).toFixed(1)} vs claimed P/E ${d.pe_ratio.toFixed(1)}`);
+  if(d.market_cap_cr && d.shares_outstanding_cr && d.current_price)
+    add('MCap ↔ Price×Shares', within(d.market_cap_cr/d.shares_outstanding_cr, d.current_price, 0.10), 'fail',
+        `mcap÷shares = ₹${(d.market_cap_cr/d.shares_outstanding_cr).toFixed(0)} vs price ₹${d.current_price.toFixed(0)}`);
+  if(d.current_price && d.book_value_per_share>0 && d.pb_ratio)
+    add('P/B ↔ Price÷BVPS', within(d.current_price/d.book_value_per_share, d.pb_ratio, 0.12), 'warn',
+        `price÷BVPS = ${(d.current_price/d.book_value_per_share).toFixed(1)} vs claimed P/B ${d.pb_ratio.toFixed(1)}`);
+
+  // 4-5: claimed CAGRs vs the history the same response returned
+  const r3 = histCagr(h.revenue_cr, 3);
+  if(r3!=null && d.revenue_cagr_3yr_pct!=null)
+    add('Revenue CAGR ↔ history', Math.abs(r3 - d.revenue_cagr_3yr_pct) <= 6, 'fail',
+        `history implies ${r3.toFixed(1)}%/yr vs claimed ${d.revenue_cagr_3yr_pct.toFixed(1)}%/yr`);
+  const p3 = histCagr(h.pat_cr, 3);
+  if(p3!=null && d.profit_cagr_3yr_pct!=null)
+    add('Profit CAGR ↔ history', Math.abs(p3 - d.profit_cagr_3yr_pct) <= 8, 'fail',
+        `history implies ${p3.toFixed(1)}%/yr vs claimed ${d.profit_cagr_3yr_pct.toFixed(1)}%/yr`);
+
+  // 6-7: margins vs history
+  const rl = histLast(h.revenue_cr), pl = histLast(h.pat_cr), ol = histLast(h.opm_pct);
+  if(rl>0 && pl!=null && d.net_margin_pct!=null)
+    add('Net margin ↔ history', Math.abs(pl/rl*100 - d.net_margin_pct) <= 4, 'warn',
+        `history implies ${(pl/rl*100).toFixed(1)}% vs claimed ${d.net_margin_pct.toFixed(1)}%`);
+  if(ol!=null && d.operating_margin_pct!=null)
+    add('Op. margin ↔ history', Math.abs(ol - d.operating_margin_pct) <= 4, 'warn',
+        `history shows ${ol.toFixed(1)}% vs claimed ${d.operating_margin_pct.toFixed(1)}%`);
+
+  // 8-10: forensic inputs tie to headline figures
+  const pio = d.piotroski_data;
+  if(pio && pio.net_income_cr!=null && pl!=null)
+    add('Piotroski NI ↔ history PAT', within(pio.net_income_cr, pl, 0.15), 'warn',
+        `Piotroski net income ${pio.net_income_cr} vs latest PAT ${pl}`);
+  const fo = d.forensic_data, be = d.beneish_data;
+  if(pio && fo && pio.total_assets_cr!=null && fo.total_assets_cr!=null)
+    add('Assets: Piotroski ↔ Altman', within(pio.total_assets_cr, fo.total_assets_cr, 0.10), 'warn',
+        `${pio.total_assets_cr} vs ${fo.total_assets_cr}`);
+  if(be && be.sales_t!=null && rl!=null)
+    add('Beneish sales ↔ history', within(be.sales_t, rl, 0.15), 'warn',
+        `Beneish sales ${be.sales_t} vs latest revenue ${rl}`);
+
+  // 11: EPS × shares ≈ PAT
+  if(d.eps_ttm>0 && d.shares_outstanding_cr>0 && pl!=null)
+    add('EPS×Shares ↔ PAT', within(d.eps_ttm*d.shares_outstanding_cr, pl, 0.25), 'warn',
+        `implies PAT ₹${(d.eps_ttm*d.shares_outstanding_cr).toFixed(0)} Cr vs history ₹${pl} Cr`);
+
+  // 12-14: hard sanity bounds
+  if(d.current_price!=null && d.fifty_two_week_high!=null && d.fifty_two_week_low!=null)
+    add('Price inside 52-wk range', d.current_price <= d.fifty_two_week_high*1.05 && d.current_price >= d.fifty_two_week_low*0.95, 'fail',
+        `₹${d.current_price} vs range ₹${d.fifty_two_week_low}–₹${d.fifty_two_week_high}`);
+  if(d.promoter_holding_pct!=null && d.fii_holding_pct!=null && d.dii_holding_pct!=null)
+    add('Holdings sum ≤ 100%', d.promoter_holding_pct + d.fii_holding_pct + d.dii_holding_pct <= 102, 'fail',
+        `${(d.promoter_holding_pct+d.fii_holding_pct+d.dii_holding_pct).toFixed(1)}% combined`);
+  const bounds = [
+    ['P/E plausible', d.pe_ratio==null || (d.pe_ratio>0 && d.pe_ratio<500), `P/E ${d.pe_ratio}`],
+    ['ROE plausible', d.roe_pct==null || (d.roe_pct>-50 && d.roe_pct<120), `ROE ${d.roe_pct}%`],
+    ['D/E plausible', d.debt_to_equity==null || (d.debt_to_equity>=0 && d.debt_to_equity<30), `D/E ${d.debt_to_equity}`]
+  ];
+  bounds.forEach(([n,ok,det]) => add(n, ok, 'fail', det));
+
+  const failed = checks.filter(c=>!c.ok && c.severity==='fail').length;
+  const warned = checks.filter(c=>!c.ok && c.severity==='warn').length;
+  return { checks, failed, warned, ran: checks.length };
+}
+
+// ── Confidence from DATA QUALITY, not company quality ────
+// HIGH means "this run's inputs are verified, self-consistent and complete",
+// not "this is a good company" — the two were conflated before.
+function deriveConfidence(d, dq, fvSpread){
+  const reasons = [];
+  let score = 100;
+  const verifiedN = (d._provenance && d._provenance.fields) ? d._provenance.fields.length : 0;
+  if(!verifiedN){ score -= 25; reasons.push('No independently verified figures — everything below is AI-sourced.'); }
+  else if(verifiedN >= 12) reasons.push(`${verifiedN} core figures independently verified.`);
+  else { score -= 8; reasons.push(`Only ${verifiedN} figures independently verified.`); }
+  if(dq){
+    score -= dq.failed*12 + dq.warned*4;
+    if(dq.failed) reasons.push(`${dq.failed} hard consistency check(s) FAILED — at least one input is wrong.`);
+    if(dq.warned) reasons.push(`${dq.warned} consistency check(s) show soft mismatches.`);
+    if(!dq.failed && !dq.warned && dq.ran) reasons.push(`All ${dq.ran} cross-field consistency checks passed.`);
+  }
+  const missing = d ? coreDataMissing(d).missing : 0;
+  if(missing){ score -= missing*6; reasons.push(`${missing} core field(s) missing.`); }
+  if(fvSpread && fvSpread.wide){
+    score -= fvSpread.ratio > 3 ? 25 : 15;
+    reasons.push(`Valuation models disagree ${fvSpread.ratio.toFixed(1)}× between lowest and highest — treat the blended fair value loosely.`);
+  }
+  if(!d.piotroski_data){ score -= 4; reasons.push('Prior-year data absent — Piotroski check could not run.'); }
+  if(!d.beneish_data){ score -= 4; reasons.push('Manipulation screen (Beneish) could not run.'); }
+  score = Math.max(0, Math.min(100, score));
+  const level = score > 72 ? 'HIGH' : score >= 50 ? 'MEDIUM' : 'LOW';
+  return { level, score, reasons };
+}
+
 // ── Data sufficiency gate ────────────────────────────────
 // Refuse to issue a verdict when core inputs are missing, instead
 // of silently defaulting scores to 50 and rating HOLD.
@@ -1202,7 +1316,7 @@ function coreDataMissing(d){
 const RATING_ORDER = ['AVOID','HOLD','BUY','STRONG BUY'];
 function deriveRating(score5y, composite, d, guards){
   if(d && coreDataMissing(d).insufficient){
-    return { r:'INSUFFICIENT DATA', c:'LOW', caps:[] };
+    return { r:'INSUFFICIENT DATA', caps:[] };
   }
   let r = score5y>=3.5 && composite>70 ? 'STRONG BUY'
         : score5y>=2.5 && composite>58 ? 'BUY'
@@ -1234,8 +1348,7 @@ function deriveRating(score5y, composite, d, guards){
         capTo('BUY', 'Price is above the blended fair value of the valuation models — limited margin of safety at today’s level.');
     }
   }
-  const c = composite>74 ? 'HIGH' : composite>57 ? 'MEDIUM' : 'LOW';
-  return { r, c, caps };
+  return { r, caps };
 }
 
 // ── Reverse DCF: what EPS growth does today's price already imply? ──
@@ -1541,7 +1654,10 @@ function renderReport(d){
   const beneish = calcBeneishM(d);
 
   const score5y = scen && d.current_price ? Math.min(5, Math.max(1, scen.base5 / d.current_price)) : 2.0;
-  const { r: rating, c: conf, caps: ratingCaps } = deriveRating(score5y, sc.composite, d, { beneish, altman, revDCF, fv });
+  const { r: rating, caps: ratingCaps } = deriveRating(score5y, sc.composite, d, { beneish, altman, revDCF, fv });
+  const dq      = validateDataConsistency(d);
+  const confObj = deriveConfidence(d, dq, calcFVSpread([dcf?.fairVal, graham, lynch, ev]));
+  const conf    = confObj.level;
   const news = calcNewsImpact(d, rating);
   const fcfDCF  = calcFCFDCF(d, d._wacc);
   const trend   = calcTrendStats(d);
@@ -1657,6 +1773,32 @@ function renderReport(d){
       <div style="font-size:0.66rem;color:var(--t)">Structured data feed unreachable — <strong style="color:var(--a)">all figures below are AI-sourced</strong> and may vary between models. Verify key numbers before acting.</div>
     </div>`}
 
+    <!-- DATA QUALITY & CONSISTENCY -->
+    <div class="card rs">
+      <div class="ch">
+        <div class="ct"><i class="fas fa-clipboard-check" style="color:${confObj.level==='HIGH'?'var(--g)':confObj.level==='MEDIUM'?'var(--a)':'var(--r)'}"></i> Data Quality — how much should you trust this run?</div>
+        <span class="cbadge c${confObj.level[0]}">${confObj.level} · ${confObj.score}/100</span>
+      </div>
+      <div class="cb">
+        <div style="font-size:0.68rem;color:var(--m);line-height:1.6;margin-bottom:9px">
+          ${confObj.reasons.map(r=>`<div style="display:flex;gap:7px;align-items:flex-start;margin-bottom:3px"><i class="fas fa-circle" style="font-size:0.3rem;margin-top:6px;color:var(--m2);flex-shrink:0"></i><span>${r}</span></div>`).join('')}
+        </div>
+        ${dq.ran ? `
+        <details>
+          <summary><i class="fas fa-chevron-right"></i> Cross-field consistency checks (${dq.ran} ran · ${dq.failed} failed · ${dq.warned} soft mismatches)</summary>
+          <div style="margin-top:9px;display:grid;grid-template-columns:1fr 1fr;gap:5px">
+            ${dq.checks.map(c=>`
+            <div style="display:flex;align-items:flex-start;gap:7px;padding:6px 9px;border-radius:7px;background:${c.ok?'var(--s2)':c.severity==='fail'?'var(--rb)':'var(--ab)'};border:1px solid ${c.ok?'var(--b)':c.severity==='fail'?'rgba(255,82,82,0.25)':'rgba(255,171,64,0.25)'}">
+              <i class="fas ${c.ok?'fa-check':c.severity==='fail'?'fa-xmark':'fa-triangle-exclamation'}" style="color:${c.ok?'var(--g)':c.severity==='fail'?'var(--r)':'var(--a)'};font-size:0.62rem;margin-top:2px"></i>
+              <div><div style="font-size:0.64rem;font-weight:700;color:${c.ok?'var(--t)':'var(--t)'}">${c.name}</div>
+              ${!c.ok?`<div style="font-size:0.56rem;color:var(--m);font-family:'JetBrains Mono',monospace">${c.detail}</div>`:''}</div>
+            </div>`).join('')}
+          </div>
+        </details>` : ''}
+        <div style="font-size:0.58rem;color:var(--m2);margin-top:8px">Confidence measures the trustworthiness of this run's data — verified coverage, internal consistency, completeness and model agreement — not the quality of the company.</div>
+      </div>
+    </div>
+
     <!-- STOCK HEADER -->
     <div class="sh rs">
       <div>
@@ -1736,7 +1878,7 @@ function renderReport(d){
         <div class="conf-row">
           <span class="conf-l">Confidence</span>
           <span class="cbadge c${conf[0]}">${conf}</span>
-          <span style="font-size:0.56rem;color:var(--m);margin-left:4px">Composite: ${sc.composite.toFixed(0)}/100</span>
+          <span style="font-size:0.56rem;color:var(--m);margin-left:4px">Composite: ${sc.composite.toFixed(0)}/100 · confidence reflects data quality (${confObj.score}/100), not company quality</span>
         </div>
         ${ratingCaps && ratingCaps.length ? `
         <div style="margin-bottom:12px;padding:9px 12px;border-radius:8px;background:var(--ab);border:1px solid rgba(255,171,64,0.25)">
@@ -2511,7 +2653,10 @@ function buildPrintReport(d){
   const cl=buildChecklist(d,peg), sc=calcScores(d,peg);
   const revDCF=calcReverseDCF(d), altman=calcAltmanZ(d), beneish=calcBeneishM(d);
   const score5y = scen&&d.current_price ? Math.min(5,Math.max(1,scen.base5/d.current_price)) : 2.0;
-  const {r:rating,c:conf,caps} = deriveRating(score5y,sc.composite,d,{beneish,altman,revDCF,fv});
+  const {r:rating,caps} = deriveRating(score5y,sc.composite,d,{beneish,altman,revDCF,fv});
+  const dq = validateDataConsistency(d);
+  const confObj = deriveConfidence(d, dq, calcFVSpread([dcf?.fairVal,graham,lynch,ev]));
+  const conf = confObj.level;
   const fscore=calcPiotroski(d), decomp=calcReturnDecomp(d,scen), news=calcNewsImpact(d,rating), trend=calcTrendStats(d);
   const passCount=cl.filter(x=>x.pass).length;
   const cmp=d.current_price;
@@ -2650,6 +2795,7 @@ function buildPrintReport(d){
 
   <p style="font-size:8px;color:${PDF_MUT};border:1px solid ${PDF_GRID};border-radius:6px;padding:6px 10px">
     How this report works: an AI researched the raw numbers from public sources${d._provenance&&d._provenance.fields&&d._provenance.fields.length?` (${d._provenance.fields.length} core figures independently verified via ${d._provenance.sources.join(' + ')})`:' (structured feed unavailable — figures are AI-sourced; verify before acting)'}; every calculation, score and rating was then computed by fixed formulas in your browser. No opinion is generated by AI.
+    <br><strong style="color:${dq.failed?PDF_CRIT:PDF_INK2}">Data quality: ${confObj.level} (${confObj.score}/100).</strong> ${dq.ran?`${dq.ran} cross-field consistency checks ran — ${dq.failed?`<strong style="color:${PDF_CRIT}">${dq.failed} FAILED</strong> (at least one input figure is wrong; treat affected numbers with caution)`:'none failed'}${dq.warned?`, ${dq.warned} soft mismatch(es)`:''}.`:''} Confidence reflects the trustworthiness of this run's data, not the quality of the company.
   </p>
 
   <!-- ══ 1. VALUATION ══ -->
@@ -2847,7 +2993,7 @@ async function yahooQuote(query){
   };
 }
 
-// ── Screener.in: resolve company page, parse the top-ratios block ──
+// ── Screener.in: resolve company page, parse ratios + full statements ──
 async function screenerFundamentals(query){
   const res = await feedFetch('https://www.screener.in/api/company/search/?q='+encodeURIComponent(query), true);
   const hit = Array.isArray(res) ? res[0] : (res.results||[])[0];
@@ -2857,8 +3003,108 @@ async function screenerFundamentals(query){
   catch(_){ html = await feedFetch('https://www.screener.in'+hit.url, false); }
   const out = parseScreenerRatios(html);
   if(!Object.keys(out).length) throw new Error('could not parse Screener ratios');
+  // Deep sections — each fails soft so a layout change never kills the feed
+  try{ out.history     = parseScreenerHistory(html);     }catch(_){}
+  try{ out.quarters    = parseScreenerQuarters(html);    }catch(_){}
+  try{ out.balance     = parseScreenerBalance(html);     }catch(_){}
+  try{ out.shareholding= parseScreenerShareholding(html);}catch(_){}
   out._page = hit.url;
   return out;
+}
+
+// Generic Screener data-table parser: given the HTML of one <section>,
+// returns { headers:[...], rows:{ "Label": [numbers...] } }.
+// Screener's statement tables have kept this exact shape for years:
+// thead th column labels, tbody rows with a td.text label cell then values.
+function parseScreenerTable(sectionHtml){
+  const headers = [];
+  const thead = /<thead[\s\S]*?<\/thead>/i.exec(sectionHtml);
+  if(thead){
+    const re = /<th[^>]*>([\s\S]*?)<\/th>/gi; let m;
+    while((m = re.exec(thead[0]))) headers.push(m[1].replace(/<[^>]*>/g,'').trim());
+  }
+  const rows = {};
+  const trRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi; let tr;
+  while((tr = trRe.exec(sectionHtml))){
+    const cells = [];
+    const tdRe = /<td[^>]*>([\s\S]*?)<\/td>/gi; let td;
+    while((td = tdRe.exec(tr[1]))) cells.push(td[1].replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim());
+    if(cells.length < 2) continue;
+    const label = cells[0].replace(/\s*\+\s*$/,'').trim();
+    if(!label) continue;
+    rows[label] = cells.slice(1).map(x => parseINum(x.replace(/%/g,'')));
+  }
+  return { headers, rows };
+}
+function screenerSection(html, id){
+  const m = new RegExp('<section[^>]*id="'+id+'"[\\s\\S]*?<\\/section>','i').exec(html);
+  return m ? m[0] : null;
+}
+const skRow = (rows, ...names) => { for(const n of names){ const k = Object.keys(rows).find(r => r.toLowerCase().startsWith(n.toLowerCase())); if(k) return rows[k]; } return null; };
+
+// Annual P&L: years, revenue, PAT, OPM — the ground truth for growth history
+function parseScreenerHistory(html){
+  const sec = screenerSection(html, 'profit-loss'); if(!sec) return null;
+  const { headers, rows } = parseScreenerTable(sec);
+  const sales = skRow(rows,'Sales','Revenue'), pat = skRow(rows,'Net Profit'), opm = skRow(rows,'OPM');
+  if(!sales || !pat) return null;
+  // headers[0] is the empty label column; drop a trailing TTM column if present
+  let years = headers.slice(1);
+  let n = years.length;
+  if(/TTM/i.test(years[n-1]||'')){ years = years.slice(0,-1); n--; }
+  const take = a => a ? a.slice(0, n) : null;
+  const last = Math.min(n, 5);                    // most recent 5 FYs
+  const sl = arr => arr ? arr.slice(n-last, n) : null;
+  const out = {
+    years:      sl(years).map(y => y.replace(/^\w+\s+/,'FY').replace(/^FY?20/,'FY')),
+    revenue_cr: sl(take(sales)),
+    pat_cr:     sl(take(pat)),
+    opm_pct:    opm ? sl(take(opm)) : null
+  };
+  if(!out.revenue_cr || out.revenue_cr.filter(x=>x!=null).length < 3) return null;
+  return out;
+}
+
+// Latest quarterly Sales / Net Profit (most recent 4)
+function parseScreenerQuarters(html){
+  const sec = screenerSection(html, 'quarters'); if(!sec) return null;
+  const { headers, rows } = parseScreenerTable(sec);
+  const sales = skRow(rows,'Sales','Revenue'), pat = skRow(rows,'Net Profit');
+  if(!sales || !pat) return null;
+  const labels = headers.slice(1);
+  const n = Math.min(sales.length, pat.length, labels.length);
+  const out = [];
+  for(let i = Math.max(0, n-4); i < n; i++){
+    if(sales[i]==null && pat[i]==null) continue;
+    out.push({ quarter: labels[i], revenue_cr: sales[i], profit_cr: pat[i] });
+  }
+  return out.length ? out.reverse() : null;   // newest first, like the AI schema
+}
+
+// Balance sheet: borrowings + equity → verified debt-to-equity
+function parseScreenerBalance(html){
+  const sec = screenerSection(html, 'balance-sheet'); if(!sec) return null;
+  const { rows } = parseScreenerTable(sec);
+  const borrow = skRow(rows,'Borrowings'), eqCap = skRow(rows,'Equity Capital'), res = skRow(rows,'Reserves');
+  if(!borrow || !eqCap) return null;
+  const lastOf = a => { for(let i=a.length-1;i>=0;i--) if(a[i]!=null) return a[i]; return null; };
+  const debt = lastOf(borrow), ec = lastOf(eqCap), rv = res ? lastOf(res) : 0;
+  if(debt==null || ec==null) return null;
+  const equity = ec + (rv||0);
+  return { total_debt_cr: debt, book_equity_cr: equity, debt_to_equity: equity>0 ? +(debt/equity).toFixed(2) : null };
+}
+
+// Shareholding: promoter / FII / DII of the latest reported quarter
+function parseScreenerShareholding(html){
+  const sec = screenerSection(html, 'shareholding'); if(!sec) return null;
+  const { rows } = parseScreenerTable(sec);
+  const lastOf = a => { if(!a) return null; for(let i=a.length-1;i>=0;i--) if(a[i]!=null) return a[i]; return null; };
+  const out = {
+    promoter_holding_pct: lastOf(skRow(rows,'Promoters')),
+    fii_holding_pct:      lastOf(skRow(rows,'FIIs')),
+    dii_holding_pct:      lastOf(skRow(rows,'DIIs'))
+  };
+  return (out.promoter_holding_pct!=null) ? out : null;
 }
 // Two-stage parser: anchored to Screener's name/number spans, with a
 // loose label-proximity fallback so minor layout changes don't kill it.
@@ -2908,6 +3154,36 @@ async function fetchVerifiedData(query){
     if(F.current_price>0 && sc.book_value>0) F.pb_ratio = +(F.current_price/sc.book_value).toFixed(2);
     if(sc.market_cap_cr>0 && F.current_price>0) F.shares_outstanding_cr = +(sc.market_cap_cr/F.current_price).toFixed(2);
     if(sc.dividend_yield_pct!=null && F.current_price>0) F.dividend_per_share = +(sc.dividend_yield_pct*F.current_price/100).toFixed(2);
+
+    // Deep-section verification: statements parsed straight from Screener
+    if(sc.balance){
+      if(sc.balance.total_debt_cr!=null)  F.total_debt_cr  = sc.balance.total_debt_cr;
+      if(sc.balance.debt_to_equity!=null) F.debt_to_equity = sc.balance.debt_to_equity;
+    }
+    if(sc.shareholding){
+      for(const k of ['promoter_holding_pct','fii_holding_pct','dii_holding_pct'])
+        if(sc.shareholding[k]!=null) F[k] = sc.shareholding[k];
+    }
+    if(sc.history){
+      v.structured = v.structured || {};
+      v.structured.financial_history = sc.history;
+      // CAGRs recomputed from the verified statement — overrides the AI's claim
+      const cagr = (arr, yrs) => {
+        const a = (arr||[]).filter(x=>x!=null&&x>0);
+        if(a.length < yrs+1) return null;
+        const first = a[a.length-1-yrs], lastV = a[a.length-1];
+        return first>0 ? +((Math.pow(lastV/first, 1/yrs)-1)*100).toFixed(1) : null;
+      };
+      const r3 = cagr(sc.history.revenue_cr, 3), p3 = cagr(sc.history.pat_cr, 3);
+      if(r3!=null) F.revenue_cagr_3yr_pct = r3;
+      if(p3!=null) F.profit_cagr_3yr_pct  = p3;
+      const opm = (sc.history.opm_pct||[]).filter(x=>x!=null);
+      if(opm.length) F.operating_margin_pct = opm[opm.length-1];
+    }
+    if(sc.quarters){
+      v.structured = v.structured || {};
+      v.structured.quarterly_results = sc.quarters;
+    }
   }
   try{ localStorage.setItem(ck, JSON.stringify({t:Date.now(), v})); }catch(_){}
   return v;
@@ -2920,6 +3196,26 @@ function applyVerifiedData(d, v){
   for(const [k,val] of Object.entries(v.fields)){
     if(val==null || !isFinite(val)) continue;
     d[k] = val; applied.push(k);
+  }
+  // Structured statements: verified history replaces the AI's outright;
+  // verified quarterly headline numbers override, AI keeps the highlights.
+  const st = v.structured || {};
+  if(st.financial_history){
+    d.financial_history = { ...st.financial_history };
+    applied.push('financial_history');
+  }
+  if(st.quarterly_results && st.quarterly_results.length){
+    const aiQ = d.quarterly_results || [];
+    d.quarterly_results = st.quarterly_results.map(q=>{
+      const ai = aiQ.find(a=>a && a.quarter && q.quarter && a.quarter.replace(/\s/g,'').toLowerCase().includes(q.quarter.replace(/\s/g,'').toLowerCase().slice(0,6)));
+      return {
+        quarter: q.quarter,
+        revenue_cr: q.revenue_cr, profit_cr: q.profit_cr,
+        yoy_growth_pct: (ai && ai.yoy_growth_pct!=null) ? ai.yoy_growth_pct : null,
+        highlights: ai ? ai.highlights : null
+      };
+    });
+    applied.push('quarterly_results');
   }
   if(applied.length){ d.price_as_of = v.asOf; }
   return applied;
@@ -3143,9 +3439,13 @@ async function analyze(){
   // ── 1. Try the structured data feed first (fails soft to AI-only) ──
   let verified = null;
   try{ verified = await fetchVerifiedData(stock); }catch(_){ /* AI-only fallback */ }
-  const vBlock = (verified && Object.keys(verified.fields).length)
-    ? `\n\nVERIFIED_MARKET_DATA — exchange/fundamentals data from ${verified.sources.join(' + ')}, as of ${verified.asOf}. Use these EXACT values in your JSON for the matching fields. Do NOT search for them again. Focus your searches on: growth history, sector data, quarterly results, news, forensic/quant data.\n${JSON.stringify(verified.fields)}`
+  let vBlock = (verified && Object.keys(verified.fields).length)
+    ? `\n\nVERIFIED_MARKET_DATA — exchange/fundamentals data from ${verified.sources.join(' + ')}, as of ${verified.asOf}. Use these EXACT values in your JSON for the matching fields. Do NOT search for them again. Focus your searches on: sector data, news, forensic/quant data, qualitative assessment.\n${JSON.stringify(verified.fields)}`
     : '';
+  if(verified && verified.structured && verified.structured.financial_history){
+    const H = verified.structured.financial_history;
+    vBlock += `\n\nVERIFIED_HISTORY — audited annual figures parsed from the company's statements. Copy these EXACTLY into "financial_history" and derive nothing that contradicts them:\n${JSON.stringify(H)}`;
+  }
 
   const userMsg = `Collect complete financial data for this Indian stock: "${stock}"\n\nSearch the web thoroughly. Return ONLY the JSON object — no other text.` + vBlock;
 
