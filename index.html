@@ -365,6 +365,10 @@ STEP 2 — Search for core data (ALL companies):
 9. "[stock] future plans expansion order book"
 10. "[sector] market size CAGR India 2025 2030"
 11. "[stock] government policy PLI scheme benefit"
+12. "[stock] product quality certifications brand reputation market share customer reviews complaints recalls"
+13. "[stock] demand outlook order inflow industry demand growth next year"
+14. "[stock] export markets tariff geopolitical supply chain dependence China US Europe exposure"
+15. "[stock] corporate governance auditor resignation related party transactions SEBI action promoter integrity"
 
 STEP 3 — Search for SECTOR-SPECIFIC metrics based on business type:
 - BANKING_NBFC: "[bank] NIM NPA CASA CAR ROA credit cost loan growth provision coverage cost income ratio"
@@ -384,7 +388,7 @@ STEP 4 — Search RECENT NEWS (last 90 days) and ASSESS ITS IMPACT:
 N1. "[stock] news latest 2026 results order win contract expansion"
 N2. "[stock] Q3 Q4 FY2026 results concall guidance management commentary"
 N3. "[stock] analyst rating target price upgrade downgrade 2026"
-For EACH material news item, judge: direction (Positive/Negative/Neutral), magnitude (High/Medium/Low), horizon (Short-term price move vs Long-term fundamental change vs Both), and a one-line "effect" explaining HOW it changes the thesis (e.g. revenue visibility, margins, order book, balance sheet). Then summarise the net short-term and long-term outlook. Do NOT invent specific filings/figures — if you cannot verify a news item, omit it.
+For EACH material news item, judge: direction (Positive/Negative/Neutral), magnitude (High/Medium/Low), horizon (Short-term price move vs Long-term fundamental change vs Both), a one-line "effect" explaining HOW it changes the thesis (e.g. revenue visibility, margins, order book, balance sheet), AND three business-impact reads — "profitability_impact" (does this news help or hurt future profits?), "stability_impact" (does it strengthen or weaken business stability — balance sheet, customer base, operations?), and "management_trust_impact" (does it raise or lower trust in management's integrity and reliability — e.g. governance lapses, auditor issues, promises kept/broken?). Each of the three is Positive/Negative/Neutral. Then summarise the net short-term and long-term outlook. Do NOT invent specific filings/figures — if you cannot verify a news item, omit it.
 
 Return ONLY valid JSON. No markdown. No preamble. Numbers are plain (no ₹, no commas). Use null if genuinely unavailable.
 
@@ -441,6 +445,15 @@ Return ONLY valid JSON. No markdown. No preamble. Numbers are plain (no ₹, no 
   "low_competition_in_niche": false,
   "large_addressable_market": true,
   "margin_expansion_potential": true,
+
+  "qualitative_assessment": {
+    "_comment": "Qualitative lenses, each scored 0-100 (higher = better/safer) and grounded in searched evidence — never guess a score without a reason. Use null when nothing reliable was found.",
+    "product_quality":  { "score": 78, "text": "One-line verdict on product/service quality and differentiation", "evidence": ["Concrete datapoint: certification, award, review pattern, recall/complaint history"] },
+    "market_presence":  { "score": 72, "text": "Competitive standing in one line", "market_share": "e.g. #2 player with ~18% share", "reach": "Distribution / geographic footprint in one line" },
+    "demand_outlook":   { "score": 80, "text": "Is demand for its products rising, stable or falling right now, and why", "drivers": ["Demand driver 1","Demand driver 2"] },
+    "growth_strategy":  { "score": 75, "text": "How credible and funded is the growth plan", "strategies": [{"strategy":"Specific initiative","credibility":"High","timeline":"FY27"}] },
+    "geopolitical":     { "score": 65, "text": "Exposure to tariffs, wars, sanctions, supply-chain and currency shocks — higher score = SAFER", "factors": ["Exposure factor 1"] }
+  },
 
   "piotroski_data": {
     "_comment": "Current AND prior fiscal year figures for the Piotroski F-Score. Search Screener.in / annual reports. Use null if not found. Consolidated figures preferred.",
@@ -510,7 +523,9 @@ Return ONLY valid JSON. No markdown. No preamble. Numbers are plain (no ₹, no 
     "key_persons": ["CMD: Name","CEO: Name"],
     "track_record_text": "Management quality summary",
     "recent_moves": ["Move 1","Move 2"],
-    "commentary": "Overall assessment"
+    "commentary": "Overall assessment",
+    "trust_score": 78,
+    "governance_flags": ["'None found' OR each concrete flag: auditor resignation, SEBI action, related-party concerns, repeated missed guidance"]
   },
   "government_support_detail": {
     "schemes": [{"name":"Scheme Name","benefit":"Specific benefit","impact":"High"}],
@@ -545,8 +560,8 @@ Return ONLY valid JSON. No markdown. No preamble. Numbers are plain (no ₹, no 
   ],
 
   "recent_news": [
-    {"date":"Jun 2026","headline":"Verified, real headline","sentiment":"Positive","impact":"High","horizon":"Long-term","effect":"How this changes the thesis in one line (e.g. adds ~1,200 Cr to order book → 18 months revenue visibility)","source":"ET Markets"},
-    {"date":"May 2026","headline":"...","sentiment":"Negative","impact":"Medium","horizon":"Short-term","effect":"...","source":"Business Standard"}
+    {"date":"Jun 2026","headline":"Verified, real headline","sentiment":"Positive","impact":"High","horizon":"Long-term","effect":"How this changes the thesis in one line (e.g. adds ~1,200 Cr to order book → 18 months revenue visibility)","source":"ET Markets","profitability_impact":"Positive","stability_impact":"Positive","management_trust_impact":"Neutral"},
+    {"date":"May 2026","headline":"...","sentiment":"Negative","impact":"Medium","horizon":"Short-term","effect":"...","source":"Business Standard","profitability_impact":"Negative","stability_impact":"Neutral","management_trust_impact":"Negative"}
   ],
   "news_impact_assessment": {
     "overall_sentiment":"Positive",
@@ -1105,16 +1120,34 @@ function buildChecklist(d, peg){
   }));
 }
 
+// Six-pillar composite. Future Growth carries the second-largest weight —
+// a multibagger screener is fundamentally a bet on the future, so demand,
+// strategy credibility and sector runway must move the verdict, not just
+// decorate the report. Missing qualitative fields fall out of the average
+// rather than silently counting as 50.
+const SCORE_WEIGHTS = { financial:0.30, growth:0.25, valuation:0.20, quality:0.10, management:0.10, policy:0.05 };
 function calcScores(d, peg){
   const cfg = getSectorConfig(d);
   const sc  = (v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100));
   const si  = (v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100));
+  const avg = arr => { const v=arr.filter(x=>x!=null&&!isNaN(x)); return v.length ? v.reduce((a,b)=>a+b,0)/v.length : null; };
+  const qa  = d.qualitative_assessment || {};
 
-  // Sector-specific financial score
+  // 1. Financial strength — sector-specific historical quality (30%)
   const fArr = cfg.fScore(d);
   const fScore = fArr.reduce((a,b)=>a+b,0) / fArr.length;
 
-  // Valuation score (common across sectors)
+  // 2. Future growth — demand today, strategy credibility, sector runway,
+  //    scalability, and the model's own sustainable-growth estimate (25%)
+  const gScore = avg([
+    qa.demand_outlook?.score,
+    qa.growth_strategy?.score,
+    d.sector_tailwind_score,
+    d.business_scalability_score,
+    d._g!=null ? Math.max(0,Math.min(100,(d._g*100-4)/(28-4)*100)) : null
+  ]) ?? 50;
+
+  // 3. Valuation attractiveness (20%)
   const vArr = [];
   if(d.pe_ratio && d.sector_pe_avg) vArr.push(Math.max(0,Math.min(100,(d.sector_pe_avg/d.pe_ratio)*50)));
   if(peg)                           vArr.push(Math.max(0,Math.min(100,(2-peg)*50)));
@@ -1125,21 +1158,28 @@ function calcScores(d, peg){
   }
   const vScore = vArr.length ? vArr.reduce((a,b)=>a+b,0)/vArr.length : 50;
 
-  const mScore = (
-    sc(d.promoter_holding_pct, 40, 75) +
-    si(d.promoter_pledge_pct,   0, 20) +
-    (d.management_track_record_score||50)
-  ) / 3;
+  // 4. Business quality & market presence — product quality, share, moat (10%)
+  const qScore = avg([
+    qa.product_quality?.score,
+    qa.market_presence?.score,
+    d.competitive_position_score
+  ]) ?? 50;
 
-  const tScore = (
-    (d.sector_tailwind_score     ||50) +
-    (d.government_support_score  ||50) +
-    (d.business_scalability_score||50)
-  ) / 3;
+  // 5. Management & governance — skin in the game, pledge, record, trust (10%)
+  const mScore = avg([
+    d.promoter_holding_pct!=null ? sc(d.promoter_holding_pct, 40, 75) : null,
+    d.promoter_pledge_pct !=null ? si(d.promoter_pledge_pct,   0, 20) : null,
+    d.management_track_record_score,
+    d.management_profile?.trust_score
+  ]) ?? 50;
 
-  const w = cfg.scoringWeights || {financial:0.40,valuation:0.25,management:0.20,tailwinds:0.15};
-  const composite = fScore*w.financial + vScore*w.valuation + mScore*w.management + tScore*w.tailwinds;
-  return { fScore, vScore, mScore, tScore, composite };
+  // 6. Policy & geopolitical safety (5%)
+  const pScore = avg([ d.government_support_score, qa.geopolitical?.score ]) ?? 50;
+
+  const w = SCORE_WEIGHTS;
+  const composite = fScore*w.financial + gScore*w.growth + vScore*w.valuation
+                  + qScore*w.quality + mScore*w.management + pScore*w.policy;
+  return { fScore, gScore, vScore, qScore, mScore, pScore, tScore:pScore, composite, weights:w };
 }
 
 // ── Data sufficiency gate ────────────────────────────────
@@ -1300,6 +1340,21 @@ function calcNewsImpact(d, rating){
   const lbl = sc => sc==null?'No signal': sc>40?'Positive': sc<-40?'Negative': sc>15?'Mildly +': sc<-15?'Mildly −':'Mixed';
   const shortScore=score(sSum,sW), longScore=score(lSum,lW);
 
+  // Business-impact dimensions: how the news flow bears on profitability,
+  // business stability, and trust in management — each a −100..+100 tilt
+  // weighted by headline magnitude. null when the AI supplied no reads.
+  const dimScore = key => {
+    let s=0,w=0;
+    items.forEach(n=>{ const v=n[key]; if(v==null) return; s+=sSign(v)*wImpact(n); w+=wImpact(n); });
+    return w ? Math.round(Math.max(-100,Math.min(100, s/w*100))) : null;
+  };
+  const dims = {
+    profit:    { score: dimScore('profitability_impact'),     name:'Profitability' },
+    stability: { score: dimScore('stability_impact'),         name:'Business stability' },
+    trust:     { score: dimScore('management_trust_impact'),  name:'Management trust' }
+  };
+  Object.values(dims).forEach(x=> x.lbl = lbl(x.score));
+
   // Alignment of long-term news tilt vs the fundamental rating
   const ratingSign = /STRONG BUY|BUY/.test(rating)?1 : rating==='AVOID'?-1 : 0;
   const newsSign   = longScore==null?0 : longScore>15?1 : longScore<-15?-1 : 0;
@@ -1311,7 +1366,7 @@ function calcNewsImpact(d, rating){
   else if(ratingSign<0 && newsSign<0){ alignment='News flow CONFIRMS the cautious fundamental view — both point the same way.'; aTone='r'; }
   else { alignment='News flow is broadly neutral relative to the fundamental rating — no strong confirmation either way.'; aTone='a'; }
 
-  return { items, shortScore, longScore, shortLbl:lbl(shortScore), longLbl:lbl(longScore), pos, neg, neu, count:items.length, alignment, aTone };
+  return { items, shortScore, longScore, shortLbl:lbl(shortScore), longLbl:lbl(longScore), pos, neg, neu, count:items.length, alignment, aTone, dims };
 }
 
 // ════════════════════════════════════════════════════════
@@ -1876,6 +1931,16 @@ function renderReport(d){
           </div>
         </div>
 
+        <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">What the news means for the business</div>
+        <div class="g3" style="margin-bottom:12px">
+          ${['profit','stability','trust'].map(k=>{const D=news.dims[k];return `
+          <div class="kbox" style="padding:9px 12px">
+            <div style="display:flex;justify-content:space-between;align-items:center"><div class="kl">${D.name}</div>
+              <span style="font-size:0.6rem;font-weight:800;color:${D.score==null?'var(--m)':D.score>15?'var(--g)':D.score<-15?'var(--r)':'var(--a)'}">${D.lbl}${D.score!=null?` · ${D.score>0?'+':''}${D.score}`:''}</span></div>
+            ${meter(D.score)}
+          </div>`;}).join('')}
+        </div>
+
         <div style="display:flex;align-items:flex-start;gap:9px;padding:9px 12px;border-radius:8px;margin-bottom:12px;background:${news.aTone==='g'?'var(--gb)':news.aTone==='r'?'var(--rb)':'var(--ab)'};border:1px solid ${news.aTone==='g'?'rgba(0,230,118,0.25)':news.aTone==='r'?'rgba(255,82,82,0.25)':'rgba(255,171,64,0.25)'}">
           <i class="fas fa-scale-balanced" style="color:${news.aTone==='g'?'var(--g)':news.aTone==='r'?'var(--r)':'var(--a)'};margin-top:2px"></i>
           <div style="font-size:0.7rem;line-height:1.6;color:var(--t)"><strong>Rating ${rating} vs news flow:</strong> ${news.alignment}</div>
@@ -1902,12 +1967,56 @@ function renderReport(d){
               ${n.source?`<span style="font-size:0.52rem;color:var(--m2)">${esc(n.source)}</span>`:''}
             </div>
             ${n.effect?`<div style="font-size:0.63rem;color:var(--m);margin-top:4px;line-height:1.5"><i class="fas fa-arrow-right-long" style="color:${sc};font-size:0.55rem"></i> ${esc(n.effect)}</div>`:''}
+            ${(n.profitability_impact||n.stability_impact||n.management_trust_impact)?`
+            <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">
+              ${[['Profitability',n.profitability_impact],['Stability',n.stability_impact],['Mgmt trust',n.management_trust_impact]].map(([lbl,v])=>{
+                if(!v) return '';
+                const c=/pos/i.test(v)?'var(--g)':/neg/i.test(v)?'var(--r)':'var(--m)';
+                const arrow=/pos/i.test(v)?'▲':/neg/i.test(v)?'▼':'■';
+                return `<span style="font-size:0.52rem;font-weight:700;color:${c};background:var(--s3);padding:2px 7px;border-radius:99px">${lbl} ${arrow}</span>`;
+              }).join('')}
+            </div>`:''}
           </div>`;
         }).join('')}
         </div>`;
       })()}
       </div>
     </div>
+
+    <!-- QUALITATIVE LENS -->
+    ${(()=>{
+      const qa = d.qualitative_assessment || {};
+      const rows = [
+        {k:'product_quality', lbl:'Product Quality',      ic:'fa-medal',        extra: qa.product_quality?.evidence},
+        {k:'market_presence', lbl:'Market Presence',      ic:'fa-store',        extra: [qa.market_presence?.market_share, qa.market_presence?.reach].filter(Boolean)},
+        {k:'demand_outlook',  lbl:'Demand for Products',  ic:'fa-fire',         extra: qa.demand_outlook?.drivers},
+        {k:'growth_strategy', lbl:'Growth Strategy',      ic:'fa-route',        extra: (qa.growth_strategy?.strategies||[]).map(s=>s&&s.strategy?`${s.strategy}${s.timeline?' ('+s.timeline+')':''}${s.credibility?' — '+s.credibility+' credibility':''}`:null).filter(Boolean)},
+        {k:'geopolitical',    lbl:'Geopolitical Safety',  ic:'fa-earth-asia',   extra: qa.geopolitical?.factors}
+      ].filter(r=>qa[r.k] && (qa[r.k].score!=null || qa[r.k].text));
+      if(!rows.length) return '';
+      return `
+    <div class="card rs">
+      <div class="ch"><div class="ct"><i class="fas fa-magnifying-glass-chart" style="color:var(--p)"></i> Qualitative Lens — Product, Market, Demand &amp; Geopolitics</div>
+        <span style="font-size:0.56rem;color:var(--m)">feeds Future Growth (25%) &amp; Quality (10%) pillars</span></div>
+      <div class="cb">
+        ${rows.map(r=>{
+          const o = qa[r.k]; const s = o.score;
+          const bc = s==null?'var(--m2)':s>70?'var(--g)':s>45?'var(--a)':'var(--r)';
+          return `
+        <div style="padding:9px 0;border-bottom:1px solid var(--b)">
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:5px">
+            <i class="fas ${r.ic}" style="color:${bc};width:15px;font-size:0.75rem"></i>
+            <div style="font-size:0.72rem;font-weight:700;color:var(--t);width:150px;flex-shrink:0">${r.lbl}</div>
+            <div class="qs-bg"><div class="qs-fill" style="width:${s!=null?s:0}%;background:${bc}"></div></div>
+            <div class="qs-val" style="color:${bc}">${s!=null?s:'N/A'}</div>
+          </div>
+          ${o.text?`<div style="font-size:0.68rem;color:var(--m);line-height:1.55;margin-left:24px">${esc(o.text)}</div>`:''}
+          ${(r.extra&&r.extra.length)?`<div class="pills" style="margin-left:24px">${r.extra.map(e=>`<span class="pb2">${esc(e)}</span>`).join('')}</div>`:''}
+        </div>`;}).join('')}
+        <div style="font-size:0.6rem;color:var(--m2);margin-top:9px;line-height:1.5">Scores are AI-assessed from searched evidence (0–100, higher = better / safer) and flow into the composite: Demand &amp; Strategy → Future Growth pillar; Product &amp; Market → Quality pillar; Geopolitical → Policy &amp; Geo pillar.</div>
+      </div>
+    </div>`;
+    })()}
 
     <!-- SCENARIO ANALYSIS -->
     <div class="card rs">
@@ -2013,13 +2122,13 @@ Fair Price = (Fair_EV − Debt + Cash) ÷ Shares
       <div class="card">
         <div class="ch"><div class="ct"><i class="fas fa-gauge-high" style="color:var(--g)"></i> Composite Quality Score</div></div>
         <div class="cb">
-          <div class="g2" style="margin-bottom:14px">
-            ${[{l:'Financial Quality',v:sc.fScore,c:'var(--g)'},{l:'Valuation Attractiveness',v:sc.vScore,c:'var(--bl)'},{l:'Management & Governance',v:sc.mScore,c:'var(--p)'},{l:'Sector & Tailwinds',v:sc.tScore,c:'var(--a)'}]
+          <div class="g3" style="margin-bottom:14px">
+            ${[{l:'Financial Strength (30%)',v:sc.fScore,c:'var(--g)'},{l:'Future Growth (25%)',v:sc.gScore,c:'#00e5ff'},{l:'Valuation (20%)',v:sc.vScore,c:'var(--bl)'},{l:'Quality & Market (10%)',v:sc.qScore,c:'var(--a)'},{l:'Management (10%)',v:sc.mScore,c:'var(--p)'},{l:'Policy & Geo (5%)',v:sc.pScore,c:'var(--m)'}]
               .map(s=>`<div class="cs-box"><div class="cs-lbl">${s.l}</div><div class="cs-val" style="color:${s.c}">${s.v.toFixed(0)}</div><div class="ks">/100</div></div>`).join('')}
           </div>
           <div style="border-top:1px solid var(--b);padding-top:12px">
             <div class="qs-row"><div class="qs-lbl" style="font-weight:800;color:var(--g)">Composite (weighted)</div><div class="qs-bg"><div class="qs-fill" style="width:${sc.composite}%;background:linear-gradient(90deg,var(--g2),#00acc1)"></div></div><div class="qs-val" style="color:var(--g)">${sc.composite.toFixed(0)}</div></div>
-            <div style="font-size:0.6rem;color:var(--m);margin-top:5px;line-height:1.6">Financial×40% + Valuation×25% + Management×20% + Tailwinds×15% (${cfg.name} sector scoring)<br>Score &gt;74 = HIGH confidence · 57-74 = MEDIUM · &lt;57 = LOW</div>
+            <div style="font-size:0.6rem;color:var(--m);margin-top:5px;line-height:1.6">Financial×30% + Future&nbsp;Growth×25% + Valuation×20% + Quality&nbsp;&amp;&nbsp;Market×10% + Management×10% + Policy&nbsp;&amp;&nbsp;Geo×5%<br>Score &gt;74 = HIGH confidence · 57-74 = MEDIUM · &lt;57 = LOW</div>
           </div>
           <details style="margin-top:12px">
             <summary><i class="fas fa-chevron-right"></i> Score Sub-Components</summary>
@@ -2118,6 +2227,16 @@ Fair Price = (Fair_EV − Debt + Cash) ÷ Shares
             <div class="kl" style="margin-bottom:5px">Management Track Record Score</div>
             <div class="qs-row" style="margin:0"><div class="qs-bg"><div class="qs-fill" style="width:${d.management_track_record_score||50}%;background:${(d.management_track_record_score||50)>70?'var(--g)':'var(--a)'}"></div></div><div class="qs-val" style="color:${(d.management_track_record_score||50)>70?'var(--g)':'var(--a)'}">${d.management_track_record_score||'N/A'}</div></div>
           </div>
+          ${d.management_profile?.trust_score!=null?`
+          <div style="margin-bottom:11px">
+            <div class="kl" style="margin-bottom:5px">Trust &amp; Reliability Score <span style="text-transform:none;letter-spacing:0;color:var(--m2)">(governance, promises kept, integrity)</span></div>
+            <div class="qs-row" style="margin:0"><div class="qs-bg"><div class="qs-fill" style="width:${d.management_profile.trust_score}%;background:${d.management_profile.trust_score>70?'var(--g)':d.management_profile.trust_score>45?'var(--a)':'var(--r)'}"></div></div><div class="qs-val" style="color:${d.management_profile.trust_score>70?'var(--g)':d.management_profile.trust_score>45?'var(--a)':'var(--r)'}">${d.management_profile.trust_score}</div></div>
+          </div>`:''}
+          ${(d.management_profile?.governance_flags||[]).length?`
+          <div style="margin-bottom:11px">
+            <div class="kl" style="margin-bottom:5px">Governance Flags</div>
+            ${d.management_profile.governance_flags.map(f=>{const clean=/^\s*none/i.test(f);return `<div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:3px"><i class="fas ${clean?'fa-circle-check':'fa-triangle-exclamation'}" style="color:${clean?'var(--g)':'var(--r)'};font-size:0.62rem;margin-top:3px;flex-shrink:0"></i><span style="font-size:0.68rem;color:${clean?'var(--m)':'var(--t)'}">${esc(f)}</span></div>`;}).join('')}
+          </div>`:''}
           ${(d.management_profile?.key_persons||[]).map(p=>`<div style="font-size:0.73rem;color:var(--t);margin-bottom:4px"><i class="fas fa-user-tie" style="color:var(--m);margin-right:5px;font-size:0.58rem"></i>${esc(p)}</div>`).join('')}
           ${d.management_profile?.recent_moves?.length?`<div style="margin-top:10px"><div class="kl" style="margin-bottom:5px">Recent Moves</div>${d.management_profile.recent_moves.map(m=>`<div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:4px"><i class="fas fa-circle" style="color:var(--bl);font-size:0.32rem;margin-top:5px;flex-shrink:0"></i><span style="font-size:0.7rem;color:var(--m)">${esc(m)}</span></div>`).join('')}</div>`:''}
           ${d.management_profile?.commentary?`<div class="comm">${esc(d.management_profile.commentary)}</div>`:''}
@@ -2449,7 +2568,23 @@ function buildPrintReport(d){
 
   // news / catalysts
   const A=d.news_impact_assessment||{};
-  const newsWords = news ? `Of the ${news.count} recent verified headlines, ${news.pos} were positive, ${news.neg} negative and ${news.neu} neutral. ${esc(A.thesis_impact)||news.alignment}` : 'No recent verified news was available for this analysis.';
+  const dimTxt = news&&news.dims ? ['profit','stability','trust'].map(k=>{const D=news.dims[k];return D.score==null?null:`${D.name.toLowerCase()}: <strong style="color:${D.score>15?PDF_GOODTXT:D.score<-15?PDF_CRIT:'#a36f00'}">${D.lbl}</strong>`;}).filter(Boolean).join(' · ') : '';
+  const newsWords = news ? `Of the ${news.count} recent verified headlines, ${news.pos} were positive, ${news.neg} negative and ${news.neu} neutral. ${dimTxt?`Weighing each story by importance, the news flow reads — ${dimTxt}. `:''}${esc(A.thesis_impact)||news.alignment}` : 'No recent verified news was available for this analysis.';
+
+  // qualitative lens tiles (only dimensions the AI actually assessed)
+  const qa = d.qualitative_assessment || {};
+  const qaTone = s => s==null?undefined : s>70?'good' : s>45?'warn' : 'crit';
+  const qaTiles = [
+    ['Product quality',    qa.product_quality],
+    ['Market presence',    qa.market_presence],
+    ['Demand for products',qa.demand_outlook],
+    ['Geopolitical safety',qa.geopolitical]
+  ].filter(([,o])=>o&&(o.score!=null||o.text))
+   .map(([l,o])=>pdfTile(l, o.score!=null?o.score+'/100':'—', esc(o.text)||'', qaTone(o.score))).join('');
+  const stratList = (qa.growth_strategy?.strategies||[]).filter(s=>s&&s.strategy);
+  const stratWords = qa.growth_strategy&&(qa.growth_strategy.text||stratList.length)
+    ? `${qa.growth_strategy.text?esc(qa.growth_strategy.text)+' ':''}${stratList.length?'Key initiatives: '+stratList.map(s=>`${esc(s.strategy)}${s.timeline?' ('+esc(s.timeline)+')':''}${s.credibility?' — '+esc(s.credibility).toLowerCase()+' credibility':''}`).join('; ')+'.':''}`
+    : '';
 
   // shareholding chart
   const shHold = pdfBarPanel('Who owns the company','% of shares held',
@@ -2583,11 +2718,22 @@ function buildPrintReport(d){
       <p style="font-size:8.5px">${d.promoter_holding_pct!=null?`Promoters hold <strong>${pdfPct(d.promoter_holding_pct)}</strong> — ${d.promoter_holding_pct>50?'a controlling stake, meaning the people running the company have most of their own wealth riding on it.':'less than half, so watch whether their stake rises (confidence) or keeps falling (caution).'}`:'Promoter holding data was unavailable.'} ${d.fii_holding_pct!=null?`Foreign institutions hold ${pdfPct(d.fii_holding_pct)} and domestic funds ${pdfPct(d.dii_holding_pct)} — institutional presence adds scrutiny and liquidity.`:''}</p>
     </div>
   </div>
+  ${(d.management_profile?.trust_score!=null || (d.management_profile?.governance_flags||[]).length)?`
+  <div style="border:1px solid ${PDF_GRID};border-radius:8px;padding:10px 13px;background:#fff;margin-top:10px">
+    <div style="font-size:9.5px;font-weight:800;margin-bottom:5px">Can you trust the people running it?</div>
+    <p style="font-size:8.5px;margin-bottom:${(d.management_profile?.governance_flags||[]).length?'5px':'0'}">${d.management_profile.trust_score!=null?`Management trust &amp; reliability scores <strong>${d.management_profile.trust_score}/100</strong> — based on governance record, promises kept versus guidance missed, and integrity signals found in public records.`:''} ${d.management_profile.track_record_text?esc(d.management_profile.track_record_text):''}</p>
+    ${(d.management_profile?.governance_flags||[]).map(f=>{const clean=/^\s*none/i.test(f);return `<div style="font-size:8.5px;color:${clean?PDF_GOODTXT:PDF_CRIT};font-weight:${clean?'400':'700'}">${clean?'✓':'▲'} ${esc(f)}</div>`;}).join('')}
+  </div>`:''}
 
   <!-- ══ 4. FUTURE PROSPECTS ══ -->
   <div class="pgbrk"></div>
   ${pdfSection(4,'Future prospects — where could this go?','The growth assumption behind every number in this report, the sector’s runway, and what the company itself is building.')}
   <p><strong>Our growth assumption, honestly explained.</strong> ${growthWords}</p>
+  ${qaTiles?`
+  <div style="font-size:9.5px;font-weight:800;margin:4px 0 6px">The qualitative lens — product, market, demand &amp; geopolitics</div>
+  <div class="g4" style="margin-bottom:8px">${qaTiles}</div>
+  <p style="font-size:8px;color:${PDF_MUT};margin-bottom:10px">Scores are AI-assessed from searched evidence (0–100, higher = better or safer) and feed the composite score: demand &amp; strategy → Future Growth pillar (25%); product &amp; market → Quality pillar (10%); geopolitics → Policy &amp; Geo pillar (5%).</p>`:''}
+  ${stratWords?`<p><strong>Growth strategy, and can they pull it off?</strong> ${stratWords}</p>`:''}
   <div class="g4" style="margin-bottom:10px">
     ${pdfTile('Sector market size (now)', esc(d.sector_detail?.market_size_current)||'N/A')}
     ${pdfTile('Expected by 2030', esc(d.sector_detail?.market_size_2030)||'N/A')}
@@ -2627,7 +2773,7 @@ function buildPrintReport(d){
 
   <div style="border-top:2px solid ${PDF_INK};padding-top:8px">
     <div style="font-size:8px;color:${PDF_MUT};line-height:1.6">
-      <strong style="color:${PDF_INK2}">Method:</strong> growth = 3-yr CAGR regressed by sector factor, blended with retention × ROE · discount rate ${(d._wacc*100).toFixed(1)}% ${waccObj?'(CAPM)':'(sector default)'} · terminal growth ${(TERMINAL_G*100).toFixed(1)}% · 10% margin of safety on DCF · engine: ${esc(d._engineLabel)||'AI + local computation'}.
+      <strong style="color:${PDF_INK2}">Method:</strong> growth = 3-yr CAGR regressed by sector factor, blended with retention × ROE · discount rate ${(d._wacc*100).toFixed(1)}% ${waccObj?'(CAPM)':'(sector default)'} · terminal growth ${(TERMINAL_G*100).toFixed(1)}% · 10% margin of safety on DCF · composite score = Financial 30% + Future Growth 25% + Valuation 20% + Quality &amp; Market 10% + Management 10% + Policy &amp; Geo 5% · engine: ${esc(d._engineLabel)||'AI + local computation'}.
       <br><strong style="color:${PDF_INK2}">Disclaimer:</strong> This report is generated by software for education and research. It is not investment advice, and the authors hold no SEBI registration. Figures may contain errors — verify independently before investing. Markets can fall as well as rise; never invest money you cannot afford to lose.
       <br>Generated ${genDate} · ${name} (${tick}) · MultibaggerAI
     </div>
