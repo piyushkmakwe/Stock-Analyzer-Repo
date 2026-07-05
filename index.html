@@ -2665,6 +2665,68 @@ let rawData = null;
 const recent = JSON.parse(localStorage.getItem('mb2_rec') || '[]');
 
 // ════════════════════════════════════════════════════════
+// PIN GATE — a light access lock on token-spending actions.
+// Only SHA-256 fingerprints of the PINs live in this file, so the
+// PINs cannot be read from the (public) source. NOTE: this is a
+// convenience lock, not real security — a static page runs entirely
+// in the visitor's browser, so a determined user can bypass any
+// client-side check. It reliably stops casual/accidental use of
+// your API quota, which is its job.
+// ════════════════════════════════════════════════════════
+const PIN_HASHES = [
+  '06dfa0f3bcd7db70e0f2484f81e747aa55318ba9a806716049d4c5f5255ff9ea',
+  '5143a5c96a812010a75cd08ce5f533db36add60dbec9c6511fea8ec17e1659d9'
+];
+async function sha256Hex(s){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+let _pinModal = null;
+function requirePin(){
+  if(sessionStorage.getItem('mb_unlocked')==='1') return Promise.resolve(true);
+  if(_pinModal) return Promise.resolve(false);          // already open
+  return new Promise(resolve=>{
+    const ov = document.createElement('div');
+    _pinModal = ov;
+    ov.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(8,12,16,0.9);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;';
+    ov.innerHTML = `
+      <div style="background:var(--sf);border:1px solid var(--b2);border-radius:16px;padding:28px 30px;max-width:340px;width:92%;text-align:center">
+        <div style="width:44px;height:44px;margin:0 auto 12px;border-radius:12px;background:linear-gradient(135deg,#00c853,#00897b);display:flex;align-items:center;justify-content:center"><i class="fas fa-lock" style="color:#000;font-size:1.1rem"></i></div>
+        <div style="font-size:0.95rem;font-weight:700;color:white;margin-bottom:4px">Enter access PIN</div>
+        <div style="font-size:0.66rem;color:var(--m);margin-bottom:16px">Running an analysis spends API tokens, so it's PIN-protected.</div>
+        <input id="pin-input" type="password" autocomplete="off" placeholder="PIN"
+          style="width:100%;background:var(--s2);border:1px solid var(--b2);color:white;padding:11px 14px;border-radius:10px;font-family:'JetBrains Mono',monospace;font-size:0.9rem;text-align:center;outline:none;letter-spacing:0.2em">
+        <div id="pin-err" style="font-size:0.62rem;color:var(--r);height:16px;margin:7px 0 5px"></div>
+        <div style="display:flex;gap:8px">
+          <button id="pin-cancel" class="ebtn" style="flex:1;justify-content:center">Cancel</button>
+          <button id="pin-go" class="abtn" style="flex:2;padding:10px"><i class="fas fa-unlock"></i> Unlock</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    const inp = ov.querySelector('#pin-input'), err = ov.querySelector('#pin-err');
+    const cleanup = ok => { ov.remove(); _pinModal = null; resolve(ok); };
+    const submit = async () => {
+      const v = inp.value.trim();
+      if(!v) return;
+      let h = '';
+      try{ h = await sha256Hex(v); }
+      catch(_){ err.textContent = 'This browser blocks the crypto API here — open the page via https or localhost.'; return; }
+      if(PIN_HASHES.includes(h)){
+        sessionStorage.setItem('mb_unlocked','1');
+        cleanup(true);
+      } else {
+        err.textContent = 'Incorrect PIN — try again.';
+        inp.value = ''; inp.focus();
+      }
+    };
+    ov.querySelector('#pin-go').onclick = submit;
+    inp.onkeydown = e => { if(e.key==='Enter') submit(); };
+    ov.querySelector('#pin-cancel').onclick = () => cleanup(false);
+    setTimeout(()=>inp.focus(), 60);
+  });
+}
+
+// ════════════════════════════════════════════════════════
 // ANALYSIS LIBRARY — persistence in localStorage
 // Every completed analysis is auto-kept (last AUTO_KEEP) so a page
 // refresh never costs tokens again; the ones you explicitly Save are
@@ -3642,6 +3704,7 @@ Return ONLY valid JSON, no markdown, exactly this shape:
 
 async function refreshNewsOnly(){
   if(!rawData){ alert('Run or open an analysis first.'); return; }
+  if(!(await requirePin())) return;                 // token-spending action — PIN-gated
   const provider = curProvider(), model = curModel();
   const key = document.getElementById('api-key').value.trim();
   if(!key){ alert(`Enter your ${AI_CONFIG[provider].label} API key first — the news refresh needs one small AI call.`); return; }
@@ -3761,6 +3824,7 @@ async function callGemini(key, model, userMsg, sys){
 }
 
 async function analyze(){
+  if(!(await requirePin())) return;                 // token-spending action — PIN-gated
   const provider = curProvider();
   const model    = curModel();
   const cfg      = AI_CONFIG[provider];

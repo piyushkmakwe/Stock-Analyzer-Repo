@@ -66,7 +66,9 @@ const MOCK = eval('(' + src.match(/const MOCK = (\{[\s\S]*?\n\});/)[1] + ')');
   res.reopenNoAI = await page.evaluate(() => window.__aiCalled === false);
 
   // ── 4. News-only refresh: stub the AI, verify merge + NEW badge + delta ──
+  // (refreshNewsOnly is PIN-gated; pre-unlock the session so no modal blocks)
   await page.evaluate(() => {
+    sessionStorage.setItem('mb_unlocked','1');
     document.getElementById('api-key').value = 'test-key';
     callAI = async (p, k, m, userMsg, sys) => {
       window.__newsSys = !!(sys && sys.includes('ONLY verified news'));
