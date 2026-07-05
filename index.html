@@ -308,6 +308,9 @@ details[open] summary i{transform:rotate(90deg);}
     <div class="rec-row" id="rec-row"><span class="rec-lbl">Recent:</span></div>
   </div>
 
+  <!-- ANALYSIS LIBRARY -->
+  <div id="shelf" style="display:none;margin-bottom:24px"></div>
+
   <!-- LOADING -->
   <div id="loading">
     <div class="ld-t">Researching <span id="ld-name" style="color:var(--g)">…</span></div>
@@ -1743,6 +1746,8 @@ function renderReport(d){
   const why     = rating==='INSUFFICIENT DATA' ? null
                 : buildRatingRationale(d, { score5y, scen, sc, rating, base: ratingBase, caps: ratingCaps, fv, revDCF, altman, beneish });
   const news = calcNewsImpact(d, rating);
+  d._lastRating = rating;                          // snapshot for the library shelf
+  const _pinned = !!(mbLoadStore().entries[mbKey(d)]||{}).pinned;
   const fcfDCF  = calcFCFDCF(d, d._wacc);
   const trend   = calcTrendStats(d);
   const resInc  = d.business_type==='BANKING_NBFC' ? calcResidualIncome(d, wacc?wacc.ke:(RF+ERP)) : null;
@@ -1835,13 +1840,25 @@ function renderReport(d){
   const fwdEPS5  = d.eps_ttm ? d.eps_ttm * Math.pow(1+d._g, 5) : null;
 
   const html = `<div id="ri">
-    <div class="exp-row rs">
+    <div class="exp-row rs" style="flex-wrap:wrap">
+      <button class="ebtn" id="btn-save" onclick="saveCurrent()" style="${_pinned?'color:var(--g);border-color:rgba(0,230,118,0.35)':''}"><i class="fas ${_pinned?'fa-bookmark':'fa-regular fa-bookmark'}"></i> ${_pinned?'Saved ✓':'Save analysis'}</button>
+      <button class="ebtn" id="btn-refresh-news" onclick="refreshNewsOnly()"><i class="fas fa-rotate"></i> Refresh news only <span style="font-size:0.52rem;color:var(--m2)">(small AI call)</span></button>
+      <button class="ebtn" id="btn-price" onclick="updatePriceFree()"><i class="fas fa-bolt"></i> Update price <span style="font-size:0.52rem;color:var(--m2)">(free, no AI)</span></button>
       <button class="ebtn" onclick="window.print()"><i class="fas fa-print"></i> Print</button>
       <button class="ebtn" onclick="copyJSON()"><i class="fas fa-code"></i> Raw JSON</button>
       <button class="ebtn" onclick="generatePDFReport()" style="background:linear-gradient(135deg,#00c853,#00897b);color:#000;font-weight:800;border:none;padding:8px 20px;letter-spacing:0.04em;box-shadow:0 3px 12px rgba(0,200,83,0.3)">
         <i class="fas fa-file-pdf"></i> Download Full PDF Report
       </button>
     </div>
+
+    ${d._storedAt ? `
+    <div class="rs" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 14px;border-radius:10px;margin-bottom:12px;background:var(--blb);border:1px solid rgba(64,196,255,0.25)">
+      <i class="fas fa-box-archive" style="color:var(--bl)"></i>
+      <div style="font-size:0.66rem;color:var(--t);line-height:1.5">
+        <strong style="color:var(--bl)">Opened from your library</strong> — analysed ${mbAge(d._storedAt)}, zero tokens spent to reopen.
+        Use <strong>Update price</strong> (free) for fresh prices/ratios, <strong>Refresh news only</strong> (small AI call) for the latest news impact, or re-run the full analysis from the search box if fundamentals may have changed (e.g. after quarterly results).
+      </div>
+    </div>` : ''}
 
     <!-- DATA PROVENANCE -->
     ${d._provenance && d._provenance.fields.length ? `
@@ -2193,6 +2210,11 @@ ${fmtINR(why.target.base5,0)} ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="
         ${news?`<span style="font-size:0.56rem;color:var(--m);font-family:'JetBrains Mono',monospace">${news.count} items · ${news.pos}▲ ${news.neg}▼ ${news.neu}■</span>`:''}
       </div>
       <div class="cb">
+      ${d._newsRefreshedAt ? `
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 11px;border-radius:8px;margin-bottom:11px;background:var(--gb);border:1px solid rgba(0,230,118,0.2)">
+        <i class="fas fa-rotate" style="color:var(--g);font-size:0.7rem"></i>
+        <span style="font-size:0.64rem;color:var(--t)">News refreshed <strong>${esc(d._newsRefreshedAt)}</strong>${news&&(news.items||[]).some(n=>n._isNew)?` · <strong style="color:var(--g)">${news.items.filter(n=>n._isNew).length} new headline(s)</strong> since the stored analysis`:' · no new headlines found'}${d._newsPrev&&news?` · sentiment shift: short-term ${d._newsPrev.short==null?'–':(d._newsPrev.short>0?'+':'')+d._newsPrev.short}→${news.shortScore==null?'–':(news.shortScore>0?'+':'')+news.shortScore}, long-term ${d._newsPrev.long==null?'–':(d._newsPrev.long>0?'+':'')+d._newsPrev.long}→${news.longScore==null?'–':(news.longScore>0?'+':'')+news.longScore}`:''}</span>
+      </div>`:''}
       ${!news ? `<div style="font-size:0.72rem;color:var(--m)">No recent news was returned for this stock. Try re-running, or use a model that searches more thoroughly (Gemini 2.5 Pro / Claude Opus).</div>` : (()=>{
         const A = d.news_impact_assessment || {};
         const oc = o => /pos/i.test(o||'')?'var(--g)':/neg/i.test(o||'')?'var(--r)':'var(--a)';
@@ -2244,7 +2266,7 @@ ${fmtINR(why.target.base5,0)} ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="
           const sc = /pos/i.test(n.sentiment)?'var(--g)':/neg/i.test(n.sentiment)?'var(--r)':'var(--a)';
           const ic = /high/i.test(n.impact||'')?'var(--r)':/low/i.test(n.impact||'')?'var(--m)':'var(--a)';
           return `<div style="padding:8px 11px;border-radius:8px;background:var(--s2);border:1px solid var(--b);border-left:3px solid ${sc}">
-            <div style="font-size:0.71rem;font-weight:700;color:var(--t);margin-bottom:3px">${esc(n.headline)}</div>
+            <div style="font-size:0.71rem;font-weight:700;color:var(--t);margin-bottom:3px">${n._isNew?'<span style="background:var(--g);color:#000;font-size:0.48rem;font-weight:900;padding:2px 6px;border-radius:4px;margin-right:6px;vertical-align:middle">NEW</span>':''}${esc(n.headline)}</div>
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span style="font-size:0.54rem;color:var(--m);font-family:'JetBrains Mono',monospace">${esc(n.date)||''}</span>
               <span style="font-size:0.54rem;font-weight:800;color:${sc};text-transform:uppercase">${esc(n.sentiment)||''}</span>
@@ -2642,7 +2664,104 @@ Fair Price = (Fair_EV − Debt + Cash) ÷ Shares
 let rawData = null;
 const recent = JSON.parse(localStorage.getItem('mb2_rec') || '[]');
 
-function init(){ populateProviders(); onProviderChange(); renderRec(); }
+// ════════════════════════════════════════════════════════
+// ANALYSIS LIBRARY — persistence in localStorage
+// Every completed analysis is auto-kept (last AUTO_KEEP) so a page
+// refresh never costs tokens again; the ones you explicitly Save are
+// pinned and never auto-evicted. Reopening renders instantly from
+// storage — zero AI calls.
+// ════════════════════════════════════════════════════════
+const MB_STORE='mb_store_v1', AUTO_KEEP=8, PIN_KEEP=20;
+function mbLoadStore(){ try{ return JSON.parse(localStorage.getItem(MB_STORE)) || {entries:{}}; }catch(_){ return {entries:{}}; } }
+function mbSaveStore(s){
+  try{ localStorage.setItem(MB_STORE, JSON.stringify(s)); }
+  catch(e){ alert('Browser storage is full — delete some saved analyses from the library and try again.'); }
+}
+function mbKey(d){ return ((d && (d.ticker||d.stock_name))||'').toUpperCase().replace(/\s+/g,'_').replace(/[^A-Z0-9_.-]/g,'').slice(0,40); }
+
+function storeAnalysis(d, pin){
+  if(!d) return;
+  const key = mbKey(d); if(!key) return;
+  const s = mbLoadStore();
+  const prev = s.entries[key];
+  s.entries[key] = {
+    t: Date.now(),
+    pinned: pin!=null ? pin : (prev ? prev.pinned : false),
+    name: d.stock_name || key, ticker: d.ticker || '',
+    rating: d._lastRating || null, price: d.current_price ?? null,
+    data: d
+  };
+  const pinnedN = Object.values(s.entries).filter(e=>e.pinned).length;
+  if(pinnedN > PIN_KEEP) alert(`You have ${pinnedN} saved analyses — browser storage is limited, consider deleting old ones.`);
+  // evict oldest UNPINNED entries beyond the auto-keep window
+  Object.entries(s.entries)
+    .filter(([,e])=>!e.pinned).sort((a,b)=>b[1].t-a[1].t)
+    .slice(AUTO_KEEP).forEach(([k])=>delete s.entries[k]);
+  mbSaveStore(s); renderShelf();
+}
+function openAnalysis(key){
+  const e = mbLoadStore().entries[key]; if(!e) return;
+  rawData = e.data;
+  rawData._storedAt = e.t;
+  document.getElementById('loading').style.display='none';
+  document.getElementById('err-panel').style.display='none';
+  renderReport(rawData);
+  document.getElementById('report').style.display='block';
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+function togglePinKey(key){
+  const s = mbLoadStore(); const e = s.entries[key]; if(!e) return;
+  e.pinned = !e.pinned; mbSaveStore(s); renderShelf();
+  if(rawData && mbKey(rawData)===key) renderReport(rawData);
+}
+function deleteAnalysis(key){
+  const s = mbLoadStore(); const e = s.entries[key]; if(!e) return;
+  if(!confirm(`Delete the stored analysis for ${e.name}?`)) return;
+  delete s.entries[key]; mbSaveStore(s); renderShelf();
+}
+function saveCurrent(){
+  if(!rawData){ alert('Run or open an analysis first.'); return; }
+  const cur = mbLoadStore().entries[mbKey(rawData)];
+  storeAnalysis(rawData, !(cur && cur.pinned));
+  renderReport(rawData);   // refresh the Save button label
+}
+function mbAge(t){
+  const m = Math.floor((Date.now()-t)/60000);
+  if(m<1) return 'just now';
+  if(m<60) return m+' min ago';
+  const h = Math.floor(m/60);
+  if(h<24) return h+' hr ago';
+  return new Date(t).toLocaleDateString('en-IN',{day:'2-digit',month:'short'});
+}
+function renderShelf(){
+  const el = document.getElementById('shelf'); if(!el) return;
+  const entries = Object.entries(mbLoadStore().entries)
+    .sort((a,b)=> (b[1].pinned-a[1].pinned) || (b[1].t-a[1].t));
+  if(!entries.length){ el.style.display='none'; el.innerHTML=''; return; }
+  el.style.display='block';
+  el.innerHTML = `
+    <div style="font-size:0.58rem;font-weight:700;color:var(--m);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px"><i class="fas fa-box-archive"></i> Analysis Library — reopen without spending tokens</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${entries.map(([k,e])=>{
+        const rc = e.rating==='STRONG BUY'||e.rating==='BUY' ? 'var(--g)' : e.rating==='HOLD' ? 'var(--a)' : e.rating ? 'var(--r)' : 'var(--m)';
+        return `
+        <div style="background:var(--sf);border:1px solid ${e.pinned?'rgba(0,230,118,0.3)':'var(--b2)'};border-radius:10px;padding:9px 12px;min-width:170px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <span style="font-size:0.7rem;font-weight:700;color:white;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px">${e.pinned?'📌 ':''}${esc(e.name)}</span>
+            <span style="font-size:0.55rem;font-weight:800;color:${rc}">${esc(e.rating)||''}</span>
+          </div>
+          <div style="font-size:0.55rem;color:var(--m);font-family:'JetBrains Mono',monospace;margin:2px 0 6px">${esc(e.ticker)} · ${e.price!=null?'&#8377;'+(+e.price).toLocaleString('en-IN'):''} · ${mbAge(e.t)}</div>
+          <div style="display:flex;gap:5px">
+            <button class="rtag" onclick="openAnalysis('${k}')" style="color:var(--g);border-color:rgba(0,230,118,0.3)">Open</button>
+            <button class="rtag" onclick="togglePinKey('${k}')">${e.pinned?'Unsave':'Save'}</button>
+            <button class="rtag" onclick="deleteAnalysis('${k}')" style="color:var(--r)">✕</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function init(){ populateProviders(); onProviderChange(); renderRec(); renderShelf(); }
 function renderRec(){
   const r = document.getElementById('rec-row');
   if(!recent.length){ r.style.display='none'; return; }
@@ -3288,9 +3407,9 @@ function parseScreenerRatios(html){
 }
 
 // ── Orchestrate: fetch both sources, derive, cache ──
-async function fetchVerifiedData(query){
+async function fetchVerifiedData(query, force){
   const ck = 'mbfeed:'+query.toLowerCase().trim();
-  try{ const c = JSON.parse(localStorage.getItem(ck)||'null'); if(c && Date.now()-c.t < FEED_TTL_MS) return c.v; }catch(_){}
+  if(!force){ try{ const c = JSON.parse(localStorage.getItem(ck)||'null'); if(c && Date.now()-c.t < FEED_TTL_MS) return c.v; }catch(_){} }
   const v = { fields:{}, sources:[], asOf:new Date().toLocaleString('en-IN') };
   let y=null, sc=null;
   try{ y = await yahooQuote(query); v.sources.push('Yahoo Finance'); }catch(_){}
@@ -3509,12 +3628,75 @@ function extractJSON(txt){
   return null;
 }
 
-// Dispatch → returns the raw text reply from the chosen provider
-async function callAI(provider, key, model, userMsg){
-  return provider==='gemini' ? callGemini(key, model, userMsg) : callClaude(key, model, userMsg);
+// ── News-only refresh: a slim AI call that re-researches ONLY recent
+// news + its impact, reusing every stored fundamental. Costs a small
+// fraction of a full analysis — this is the cheap "rerun" path.
+const NEWS_SYSTEM = `You are updating the news section of an EXISTING equity analysis for an Indian stock. Do NOT research fundamentals, prices or financials — ONLY verified news from the last 90 days.
+Searches: "[stock] news latest results order win contract" · "[stock] concall guidance management commentary" · "[stock] analyst rating upgrade downgrade".
+For each verified item judge: sentiment (Positive/Negative/Neutral), impact (High/Medium/Low), horizon (Short-term/Long-term/Both), a one-line "effect" tying it to a fundamental driver, and three business reads — profitability_impact, stability_impact, management_trust_impact (each Positive/Negative/Neutral). NEVER invent a headline; omit anything unverifiable.
+Return ONLY valid JSON, no markdown, exactly this shape:
+{
+  "recent_news": [ {"date":"Jun 2026","headline":"...","sentiment":"Positive","impact":"High","horizon":"Long-term","effect":"...","source":"...","profitability_impact":"Positive","stability_impact":"Neutral","management_trust_impact":"Neutral"} ],
+  "news_impact_assessment": { "overall_sentiment":"Positive", "short_term":{"outlook":"...","rationale":"..."}, "long_term":{"outlook":"...","rationale":"..."}, "key_catalysts":["..."], "thesis_impact":"..." }
+}`;
+
+async function refreshNewsOnly(){
+  if(!rawData){ alert('Run or open an analysis first.'); return; }
+  const provider = curProvider(), model = curModel();
+  const key = document.getElementById('api-key').value.trim();
+  if(!key){ alert(`Enter your ${AI_CONFIG[provider].label} API key first — the news refresh needs one small AI call.`); return; }
+  const btn = document.getElementById('btn-refresh-news');
+  const orig = btn ? btn.innerHTML : null;
+  if(btn){ btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating news…'; btn.disabled = true; }
+  try{
+    const nm = `${rawData.stock_name||''}${rawData.ticker?' ('+rawData.ticker+')':''}`.trim();
+    const txt = await callAI(provider, key, model,
+      `Update ONLY the news for this Indian stock: "${nm}". Search the web for verified news from the last 90 days and return ONLY the JSON object.`, NEWS_SYSTEM);
+    const j = extractJSON(txt);
+    if(!j || !Array.isArray(j.recent_news)) throw new Error('The model did not return the expected news JSON — try again.');
+    // snapshot the previous read so the report can show what actually changed
+    const prevImpact = calcNewsImpact(rawData, 'HOLD');
+    const norm = s => (s||'').toLowerCase().replace(/\W+/g,' ').trim();
+    const prevSet = new Set((rawData.recent_news||[]).map(n=>norm(n.headline)));
+    j.recent_news.forEach(n=>{ if(n) n._isNew = !prevSet.has(norm(n.headline)); });
+    rawData._newsPrev = prevImpact ? { short: prevImpact.shortScore, long: prevImpact.longScore } : null;
+    rawData.recent_news = j.recent_news;
+    if(j.news_impact_assessment) rawData.news_impact_assessment = j.news_impact_assessment;
+    rawData._newsRefreshedAt = new Date().toLocaleString('en-IN', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+    renderReport(rawData);
+    storeAnalysis(rawData);
+  }catch(e){
+    alert('News refresh failed: ' + e.message);
+    if(btn){ btn.innerHTML = orig; btn.disabled = false; }
+  }
 }
 
-async function callClaude(key, model, userMsg){
+// ── Free price/ratio update: hits only Yahoo/Screener (no AI, no
+// tokens) and recomputes every valuation at the fresh price.
+async function updatePriceFree(){
+  if(!rawData){ alert('Run or open an analysis first.'); return; }
+  const btn = document.getElementById('btn-price');
+  const orig = btn ? btn.innerHTML : null;
+  if(btn){ btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Fetching…'; btn.disabled = true; }
+  try{
+    const q = rawData._query || rawData.ticker || rawData.stock_name;
+    const v = await fetchVerifiedData(q, true);
+    const applied = applyVerifiedData(rawData, v);
+    if(applied.length) rawData._provenance = { sources: v.sources, asOf: v.asOf, fields: applied, symbol: v.symbol||null };
+    renderReport(rawData);
+    storeAnalysis(rawData);
+  }catch(e){
+    alert('Could not reach the free data feed ('+e.message+') — prices unchanged.');
+    if(btn){ btn.innerHTML = orig; btn.disabled = false; }
+  }
+}
+
+// Dispatch → returns the raw text reply from the chosen provider
+async function callAI(provider, key, model, userMsg, sys){
+  return provider==='gemini' ? callGemini(key, model, userMsg, sys) : callClaude(key, model, userMsg, sys);
+}
+
+async function callClaude(key, model, userMsg, sys){
   const res = await fetch('https://api.anthropic.com/v1/messages',{
     method:'POST',
     headers:{ 'Content-Type':'application/json', 'x-api-key':key,
@@ -3522,7 +3704,7 @@ async function callClaude(key, model, userMsg){
     body: JSON.stringify({
       model, max_tokens:16000,
       tools:[{ type:'web_search_20250305', name:'web_search' }],
-      system: SYSTEM,
+      system: sys || SYSTEM,
       messages:[{ role:'user', content:userMsg }]
     })
   });
@@ -3531,7 +3713,7 @@ async function callClaude(key, model, userMsg){
   return (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
 }
 
-async function callGemini(key, model, userMsg){
+async function callGemini(key, model, userMsg, sys){
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
   let res;
   try{
@@ -3539,7 +3721,7 @@ async function callGemini(key, model, userMsg){
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
       body: JSON.stringify({
-        system_instruction:{ parts:[{ text: SYSTEM }] },
+        system_instruction:{ parts:[{ text: sys || SYSTEM }] },
         contents:[{ role:'user', parts:[{ text: userMsg }] }],
         tools:[{ google_search:{} }],
         generationConfig:{ maxOutputTokens:32768, temperature:0.2 }
@@ -3617,6 +3799,7 @@ async function analyze(){
     rawData = extractJSON(txt);
     if(!rawData) throw new Error('Could not extract JSON from the AI response. The model may have returned an unexpected format — try again, or switch models.');
     rawData._engineLabel = `${cfg.label} · ${model}`;
+    rawData._query = stock;                                  // remembered for the free price refresh
     // ── 2. Verified numbers override the AI's — same stock, same result ──
     if(verified){
       const applied = applyVerifiedData(rawData, verified);
@@ -3624,6 +3807,7 @@ async function analyze(){
     }
 
     renderReport(rawData);                                   // synchronous so render errors hit the catch below
+    storeAnalysis(rawData);                                  // auto-kept — a refresh never costs tokens again
     document.getElementById('loading').style.display = 'none';
     document.getElementById('abtn').disabled = false;
     document.getElementById('abtn').innerHTML = '<i class="fas fa-calculator"></i> Run Analysis';
