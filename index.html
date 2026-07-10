@@ -1105,6 +1105,41 @@ function calcScenarios(d){
   };
 }
 
+// ── Exit-point target ladder: 6M / 1Y / 2Y / 5Y ──────────
+// Same growth cases as the scenarios, with one extra honesty rule:
+// the P/E multiple re-rates toward its destination LINEARLY over five
+// years — multiples don't jump in six months, so near-term targets are
+// earnings-driven and the re-rating accrues to the far targets. (At
+// t=5 this reproduces the classic scenario numbers exactly.) Short
+// horizons are exit/trim references, not promises: market noise
+// dominates 6-month moves.
+function calcTargetLadder(d){
+  const e=d.eps_ttm, g=d._g, cmp=d.current_price;
+  if(!e || e<=0 || !cmp || g==null) return null;
+  const pe  = d.pe_ratio || (cmp/e);
+  const spe = d.sector_pe_avg || 30;
+  const cases = {
+    bear: { g: g*0.45,               endPE: pe*0.80 },
+    base: { g: g,                    endPE: pe + (spe-pe)*0.40 },
+    bull: { g: Math.min(g*1.35,0.42), endPE: spe }
+  };
+  const horizons = [
+    { k:'6M', t:0.5, label:'6 months', term:'short' },
+    { k:'1Y', t:1,   label:'1 year',   term:'short' },
+    { k:'2Y', t:2,   label:'2 years',  term:'long'  },
+    { k:'5Y', t:5,   label:'5 years',  term:'long'  }
+  ];
+  return horizons.map(h=>{
+    const row = { k:h.k, t:h.t, label:h.label, term:h.term };
+    for(const [nm,c] of Object.entries(cases)){
+      const peT = pe + (c.endPE - pe) * (h.t/5);
+      const px  = e * Math.pow(1+c.g, h.t) * peT;
+      row[nm] = { px, ret:(px/cmp-1)*100, cagr:(Math.pow(Math.max(px/cmp,0.01), 1/h.t)-1)*100 };
+    }
+    return row;
+  });
+}
+
 // ── PEG Ratio ───────────────────────────────────────────
 function calcPEG(pe, growthPct){
   if(!pe||!growthPct||growthPct<=0) return null;
@@ -1746,6 +1781,7 @@ function renderReport(d){
   const why     = rating==='INSUFFICIENT DATA' ? null
                 : buildRatingRationale(d, { score5y, scen, sc, rating, base: ratingBase, caps: ratingCaps, fv, revDCF, altman, beneish });
   const news = calcNewsImpact(d, rating);
+  const ladder = calcTargetLadder(d);
   d._lastRating = rating;                          // snapshot for the library shelf
   const _pinned = !!(mbLoadStore().entries[mbKey(d)]||{}).pinned;
   const fcfDCF  = calcFCFDCF(d, d._wacc);
@@ -1858,7 +1894,14 @@ function renderReport(d){
         <strong style="color:var(--bl)">Opened from your library</strong> — analysed ${mbAge(d._storedAt)}, zero tokens spent to reopen.
         Use <strong>Update price</strong> (free) for fresh prices/ratios, <strong>Refresh news only</strong> (small AI call) for the latest news impact, or re-run the full analysis from the search box if fundamentals may have changed (e.g. after quarterly results).
       </div>
-    </div>` : ''}
+    </div>
+    ${needsRerun(d._storedAt) ? `
+    <div class="rs" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 14px;border-radius:10px;margin-bottom:12px;background:var(--ab);border:1px solid rgba(255,171,64,0.35)">
+      <i class="fas fa-clock" style="color:var(--a)"></i>
+      <div style="font-size:0.66rem;color:var(--t);line-height:1.5">
+        <strong style="color:var(--a)">Quarterly results have likely been published since this analysis</strong> — the fundamentals below may be one quarter stale. A full re-run from the search box is recommended before acting on the targets.
+      </div>
+    </div>` : ''}` : ''}
 
     <!-- DATA PROVENANCE -->
     ${d._provenance && d._provenance.fields.length ? `
@@ -1987,9 +2030,9 @@ function renderReport(d){
           ${ratingCaps.map(c=>`<div style="font-size:0.66rem;color:var(--t);line-height:1.55;margin-bottom:3px"><strong style="color:var(--a)">${c.from} → ${c.to}:</strong> ${c.why}</div>`).join('')}
         </div>`:''}
         <div class="tg">
-          <div class="tb"><div class="tbl">2Y Target (Base)</div><div class="tbv">${scen?fmtINR(scen.base2,0):'—'}</div></div>
-          <div class="tb"><div class="tbl">5Y Target (Base)</div><div class="tbv">${scen?fmtINR(scen.base5,0):'—'}</div></div>
-          <div class="tb"><div class="tbl">DCF Fair Value</div><div class="tbv am">${dcf?fmtINR(dcf.fairVal,0):'N/A'}</div></div>
+          <div class="tb"><div class="tbl">6M Target (Base)</div><div class="tbv">${ladder?fmtINR(ladder[0].base.px,0):'—'}</div></div>
+          <div class="tb"><div class="tbl">1Y Target (Base)</div><div class="tbv">${ladder?fmtINR(ladder[1].base.px,0):'—'}</div></div>
+          <div class="tb"><div class="tbl">5Y Target (Base)</div><div class="tbv">${ladder?fmtINR(ladder[3].base.px,0):'—'}</div></div>
         </div>
         <div class="g4" style="margin-bottom:12px">
           <div class="kbox"><div class="kl">Growth Est. (5Y)</div><div class="kv g" style="font-size:0.82rem">${pct(d._g*100)}/yr</div><div class="ks">${cfg.growthReg*100|0}% of hist. CAGR</div></div>
@@ -2326,10 +2369,30 @@ ${fmtINR(why.target.base5,0)} ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="
     </div>`;
     })()}
 
-    <!-- SCENARIO ANALYSIS -->
+    <!-- TARGET LADDER + SCENARIO ANALYSIS -->
     <div class="card rs">
-      <div class="ch"><div class="ct"><i class="fas fa-chart-gantt" style="color:var(--a)"></i> Scenario Analysis — 5-Year Price Range</div></div>
-      <div class="cb">${scenHTML}</div>
+      <div class="ch"><div class="ct"><i class="fas fa-stairs" style="color:var(--g)"></i> Exit-Point Ladder — Short &amp; Long-Term Targets</div>
+        <span style="font-size:0.56rem;color:var(--m)">multiple re-rates gradually — near-term targets are earnings-driven</span></div>
+      <div class="cb">
+        ${ladder ? `
+        <table class="dcf-t" style="margin-bottom:10px">
+          <tr><th>Horizon</th><th></th><th style="color:var(--r)">Bear</th><th style="color:var(--a)">Base — exit reference</th><th style="color:var(--g)">Bull</th><th>Base return /yr</th></tr>
+          ${ladder.map(r=>`
+          <tr${r.k==='1Y'?' style="border-bottom:2px solid var(--b2)"':''}>
+            <td style="font-weight:700;color:var(--t)">${r.label}</td>
+            <td><span style="font-size:0.5rem;font-weight:800;padding:1px 6px;border-radius:99px;${r.term==='short'?'background:var(--blb);color:var(--bl)':'background:var(--pb);color:var(--p)'}">${r.term==='short'?'SHORT-TERM':'LONG-TERM'}</span></td>
+            <td style="color:var(--r)">${fmtINR(r.bear.px,0)} <span style="font-size:0.55rem">(${fmtP(r.bear.ret)})</span></td>
+            <td style="color:var(--a);font-weight:700">${fmtINR(r.base.px,0)} <span style="font-size:0.55rem">(${fmtP(r.base.ret)})</span></td>
+            <td style="color:var(--g)">${fmtINR(r.bull.px,0)} <span style="font-size:0.55rem">(${fmtP(r.bull.ret)})</span></td>
+            <td style="color:var(--bl)">${fmtP(r.base.cagr)}</td>
+          </tr>`).join('')}
+        </table>
+        <div style="font-size:0.62rem;color:var(--m);line-height:1.6;padding:8px 11px;background:var(--s2);border-radius:7px;border:1px solid var(--b);margin-bottom:14px">
+          <strong style="color:var(--t)">How to use this:</strong> the <strong style="color:var(--a)">base column is your exit reference</strong> — if the price reaches the 6-month or 1-year base target well ahead of schedule, the easy gains are in and trimming is rational; if it reaches the bull number, the market is paying tomorrow's price today. <strong style="color:var(--r)">Honesty note:</strong> 6-month moves are dominated by market mood, not fundamentals — treat short-term rows as planning references with wide error bars, and the 2–5 year rows as where this analysis actually has an edge.
+        </div>` : '<div style="font-size:0.72rem;color:var(--m);margin-bottom:10px">EPS and price data required for the target ladder.</div>'}
+        <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:4px">5-Year Range Visualised</div>
+        ${scenHTML}
+      </div>
     </div>
 
     <!-- VALUATION MODELS -->
@@ -2776,10 +2839,72 @@ function togglePinKey(key){
   e.pinned = !e.pinned; mbSaveStore(s); renderShelf();
   if(rawData && mbKey(rawData)===key) renderReport(rawData);
 }
+// Deleting always confirms; deleting a SAVED analysis confirms twice.
 function deleteAnalysis(key){
   const s = mbLoadStore(); const e = s.entries[key]; if(!e) return;
-  if(!confirm(`Delete the stored analysis for ${e.name}?`)) return;
+  if(e.pinned){
+    if(!confirm(`"${e.name}" is a SAVED analysis you chose to keep.\n\nDelete it anyway?`)) return;
+    if(!confirm(`Final confirmation — permanently delete the saved analysis for ${e.name}?\n\nThis cannot be undone (consider Export backup first).`)) return;
+  } else {
+    if(!confirm(`Delete the stored analysis for ${e.name}?`)) return;
+  }
   delete s.entries[key]; mbSaveStore(s); renderShelf();
+}
+
+// ── Quarterly-results reminder ────────────────────────────
+// Indian quarters end Mar/Jun/Sep/Dec; results land within ~45 days.
+// If such a checkpoint has passed since an analysis was stored, its
+// fundamentals may be a quarter stale — remind the user to re-run.
+function lastResultsCheckpoint(now = Date.now()){
+  const y = new Date(now).getFullYear();
+  let latest = 0;
+  for(const yy of [y-1, y]){
+    for(const [m, day] of [[2,31],[5,30],[8,30],[11,31]]){
+      const cp = new Date(yy, m, day).getTime() + 45*86400000;
+      if(cp <= now && cp > latest) latest = cp;
+    }
+  }
+  return latest;
+}
+function needsRerun(storedAt){ return storedAt != null && storedAt < lastResultsCheckpoint(); }
+
+// ── Backup: export / import the whole library as a JSON file ──
+// localStorage can be wiped by browser cleanups — a downloaded backup
+// can't. Import merges (newer entry wins) and never deletes anything.
+function exportLibrary(){
+  const s = mbLoadStore();
+  if(!Object.keys(s.entries).length){ alert('Nothing to export yet.'); return; }
+  const blob = new Blob([JSON.stringify({ version:1, exportedAt:new Date().toISOString(), ...s }, null, 1)], { type:'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'multibagger_library_' + new Date().toISOString().slice(0,10) + '.json';
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+}
+function importLibrary(){
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'application/json,.json';
+  inp.onchange = () => {
+    const f = inp.files && inp.files[0]; if(!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try{
+        const j = JSON.parse(rd.result);
+        if(!j || typeof j.entries !== 'object') throw new Error('not a library backup file');
+        const s = mbLoadStore();
+        let added = 0, updated = 0;
+        for(const [k, e] of Object.entries(j.entries)){
+          if(!e || !e.data) continue;
+          if(!s.entries[k]){ s.entries[k] = e; added++; }
+          else if((e.t||0) > (s.entries[k].t||0)){ s.entries[k] = { ...e, pinned: s.entries[k].pinned || e.pinned }; updated++; }
+        }
+        mbSaveStore(s); renderShelf();
+        alert(`Import complete: ${added} added, ${updated} updated, nothing deleted.`);
+      }catch(err){ alert('Import failed: ' + err.message); }
+    };
+    rd.readAsText(f);
+  };
+  inp.click();
 }
 function saveCurrent(){
   if(!rawData){ alert('Run or open an analysis first.'); return; }
@@ -2802,17 +2927,25 @@ function renderShelf(){
   if(!entries.length){ el.style.display='none'; el.innerHTML=''; return; }
   el.style.display='block';
   el.innerHTML = `
-    <div style="font-size:0.58rem;font-weight:700;color:var(--m);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px"><i class="fas fa-box-archive"></i> Analysis Library — reopen without spending tokens</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <div style="font-size:0.58rem;font-weight:700;color:var(--m);letter-spacing:0.1em;text-transform:uppercase"><i class="fas fa-box-archive"></i> Analysis Library — reopen without spending tokens</div>
+      <div style="display:flex;gap:6px">
+        <button class="rtag" onclick="exportLibrary()"><i class="fas fa-download"></i> Export backup</button>
+        <button class="rtag" onclick="importLibrary()"><i class="fas fa-upload"></i> Import</button>
+      </div>
+    </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${entries.map(([k,e])=>{
         const rc = e.rating==='STRONG BUY'||e.rating==='BUY' ? 'var(--g)' : e.rating==='HOLD' ? 'var(--a)' : e.rating ? 'var(--r)' : 'var(--m)';
+        const stale = needsRerun(e.t);
         return `
-        <div style="background:var(--sf);border:1px solid ${e.pinned?'rgba(0,230,118,0.3)':'var(--b2)'};border-radius:10px;padding:9px 12px;min-width:170px">
+        <div style="background:var(--sf);border:1px solid ${stale?'rgba(255,171,64,0.45)':e.pinned?'rgba(0,230,118,0.3)':'var(--b2)'};border-radius:10px;padding:9px 12px;min-width:170px">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
             <span style="font-size:0.7rem;font-weight:700;color:white;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px">${e.pinned?'📌 ':''}${esc(e.name)}</span>
             <span style="font-size:0.55rem;font-weight:800;color:${rc}">${esc(e.rating)||''}</span>
           </div>
           <div style="font-size:0.55rem;color:var(--m);font-family:'JetBrains Mono',monospace;margin:2px 0 6px">${esc(e.ticker)} · ${e.price!=null?'&#8377;'+(+e.price).toLocaleString('en-IN'):''} · ${mbAge(e.t)}</div>
+          ${stale?`<div style="font-size:0.54rem;font-weight:700;color:var(--a);margin-bottom:6px"><i class="fas fa-clock"></i> Quarterly results since — re-run advised</div>`:''}
           <div style="display:flex;gap:5px">
             <button class="rtag" onclick="openAnalysis('${k}')" style="color:var(--g);border-color:rgba(0,230,118,0.3)">Open</button>
             <button class="rtag" onclick="togglePinKey('${k}')">${e.pinned?'Unsave':'Save'}</button>
@@ -2985,6 +3118,7 @@ function buildPrintReport(d){
   const why = rating==='INSUFFICIENT DATA' ? null
             : buildRatingRationale(d, { score5y, scen, sc, rating, base: ratingBase, caps, fv, revDCF, altman, beneish });
   const fscore=calcPiotroski(d), decomp=calcReturnDecomp(d,scen), news=calcNewsImpact(d,rating), trend=calcTrendStats(d);
+  const ladder = calcTargetLadder(d);
   const passCount=cl.filter(x=>x.pass).length;
   const cmp=d.current_price;
   const genDate=new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'long',year:'numeric'});
@@ -3128,7 +3262,7 @@ function buildPrintReport(d){
 
   <div class="g4" style="margin-bottom:12px">
     ${pdfTile("Today's price", pdfINR(cmp))}
-    ${pdfTile('5-yr base target', scen?pdfINR(scen.base5):'N/A', scen&&cmp?`${(scen.base5/cmp).toFixed(2)}× today’s price`:'' )}
+    ${pdfTile('1-yr target (base)', ladder?pdfINR(ladder[1].base.px):'N/A', ladder&&cmp?`5-yr base: ${pdfINR(ladder[3].base.px)} (${(ladder[3].base.px/cmp).toFixed(2)}×)`:'' )}
     ${pdfTile('Fair value (blended)', fv?pdfINR(fv):'N/A', fv&&cmp?(cmp<fv?'price is below fair value':'price is above fair value'):'', fv&&cmp?(cmp<fv?'good':'warn'):undefined)}
     ${pdfTile('Market cap', d.market_cap_cr?('₹'+pdfNum(d.market_cap_cr)+' Cr'):'N/A')}
   </div>
@@ -3236,6 +3370,20 @@ function buildPrintReport(d){
   </div>`:''}
   ${(A.key_catalysts||[]).length?`<p><strong>Catalysts to watch:</strong> ${A.key_catalysts.map(c=>esc(c)).join(' · ')}</p>`:''}
   <p><strong>Recent news, weighed.</strong> ${newsWords}</p>
+  ${ladder?`
+  <div style="margin:12px 0 4px;font-size:9.5px;font-weight:800">Exit-point ladder — short &amp; long-term targets</div>
+  <table style="margin-bottom:6px">
+    <tr><th>Horizon</th><th></th><th>Bear</th><th>Base — exit reference</th><th>Bull</th><th>Base return /yr</th></tr>
+    ${ladder.map(r=>`<tr>
+      <td style="font-weight:700;color:${PDF_INK}">${r.label}</td>
+      <td style="font-size:7px;font-weight:800;color:${r.term==='short'?'#1c5cab':'#4a3aa7'}">${r.term==='short'?'SHORT-TERM':'LONG-TERM'}</td>
+      <td style="color:${PDF_CRIT}">${pdfINR(r.bear.px)} (${r.bear.ret>=0?'+':''}${r.bear.ret.toFixed(0)}%)</td>
+      <td style="font-weight:800;color:${PDF_INK}">${pdfINR(r.base.px)} (${r.base.ret>=0?'+':''}${r.base.ret.toFixed(0)}%)</td>
+      <td style="color:${PDF_GOODTXT}">${pdfINR(r.bull.px)} (${r.bull.ret>=0?'+':''}${r.bull.ret.toFixed(0)}%)</td>
+      <td>${r.base.cagr.toFixed(1)}%</td>
+    </tr>`).join('')}
+  </table>
+  <p style="font-size:8px;color:${PDF_MUT};margin-bottom:10px">The base column is the exit reference: reaching a target well ahead of schedule means the easy gains are in. Multiples re-rate gradually in this model, so near-term targets are earnings-driven. Honesty note: 6-month prices are dominated by market mood — treat short-term rows as wide-error planning references; the 2–5 year rows are where the analysis has an edge.</p>`:''}
   <div style="margin:12px 0 4px;font-size:9.5px;font-weight:800">Three futures for the share price (5-year view)</div>
   ${pdfRangeStrip(scen,cmp)}
   ${scenWords?`<p style="margin-top:8px">${scenWords}</p>`:''}
