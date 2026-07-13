@@ -1,6 +1,6 @@
 # Multibagger AI — Precision Stock Analyzer
 
-A single-file, client-side stock research tool for Indian equities. It combines an
+A client-side stock research tool for Indian equities (no build step, no backend — `index.html` plus plain CSS/JS modules under `css/` and `js/`). It combines an
 AI web-research layer (Claude or Gemini, with live web/Google search grounding) for
 raw fundamentals with a local, deterministic valuation engine — DCF (10-year,
 3-phase), Graham Number, Peter Lynch fair value, EV/EBITDA relative valuation,
@@ -13,7 +13,7 @@ numbers and recent news, never to opine or calculate.
 
 ## Usage
 
-1. Open `index.html` in a browser (see note on Gemini + `file://` below).
+1. Clone or download the whole repo (the app is `index.html` + `css/` + `js/`), then open `index.html` in a browser (see note on Gemini + `file://` below).
 2. Pick a provider (Claude or Gemini) and paste your own API key. The key is used
    directly from your browser to call the provider's API and is never sent
    anywhere else; it is stored only in `localStorage` on your machine for
@@ -56,7 +56,7 @@ Claude works fine when the file is opened directly, since it enables
 ## Security notes
 
 - All AI/web-sourced text (company names, news headlines, business descriptions,
-  etc.) is HTML-escaped (`esc()` in `index.html`) before being inserted into the
+  etc.) is HTML-escaped (`esc()` in `js/02-engine.js`) before being inserted into the
   page, since that text ultimately originates from web search results the AI
   reproduces — without escaping, adversarial content indexed by search could
   execute as HTML/script in your browser.
@@ -65,9 +65,28 @@ Claude works fine when the file is opened directly, since it enables
 - The structured data feed proxies requests through third-party public CORS
   proxies (`corsproxy.io`, `allorigins.win`) when a direct fetch is blocked, so
   those services can see the stock names you search for. Disable/adjust
-  `CORS_ROUTES` in `index.html` if that's not acceptable for your use case.
+  `CORS_ROUTES` in `js/06-feed.js` if that's not acceptable for your use case.
 
 ## Disclaimer
 
 This tool is for educational/research purposes only and is not investment advice.
 Verify all figures independently before making investment decisions.
+
+## Code layout
+
+| File | Contents |
+|---|---|
+| `index.html` | Page markup only — loads the modules below in order |
+| `css/styles.css` | All styling |
+| `js/01-prompt.js` | The AI research instruction + JSON schema |
+| `js/02-engine.js` | Every calculation: sector configs, valuations, forecasting, forensics, scoring, rating, rationale, validators |
+| `js/03-report.js` | On-screen report renderer |
+| `js/04-app.js` | PIN gate, analysis library (save/export/import/reminders), app state |
+| `js/05-pdf.js` | Print-native PDF report builder |
+| `js/06-feed.js` | Verified data feed (Yahoo / Screener parsers) |
+| `js/07-ai.js` | AI provider layer (Claude/Gemini), analyze flow, news-only refresh |
+
+Plain `<script>` files sharing one global scope — load order matters and is
+encoded in the filenames. No bundler, no modules, so `file://` usage still works.
+Note: splitting files is for maintainability only; it adds no security — all
+client-side code is fully visible to every visitor regardless of file layout.
