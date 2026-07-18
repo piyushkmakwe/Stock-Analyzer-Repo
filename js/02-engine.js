@@ -881,7 +881,9 @@ function buildRatingRationale(d, x){
   };
 
   // 2. The 5-yr score arithmetic
-  const target = (scen && cmp) ? { eps: d.eps_ttm, g: d._g, exitPE: scen.bsPE, base5: scen.base5, cmp, score: score5y } : null;
+  const div5 = (d.dividend_per_share||0) * 5;
+  const target = (scen && cmp) ? { eps: d.eps_ttm, g: d._g, exitPE: scen.bsPE,
+    bear5: scen.bear5, base5: scen.base5, bull5: scen.bull5, div5, cmp, score: score5y } : null;
 
   // 3. Composite build-up
   const W = sc.weights || SCORE_WEIGHTS;
@@ -1222,21 +1224,6 @@ function calcResidualIncome(d, ke){
   return { value: bvps*justifiedPB, justifiedPB, ke, impliedROE:r, g };
 }
 
-// ── Peer-regression "justified" P/E (Tier 3 #10, single-factor) ──
-function calcJustifiedPE(d){
-  const peers=(d.competitors||[]).filter(c=>c.pe>0 && c.revenue_growth_pct!=null);
-  if(peers.length<3) return null;
-  const x=peers.map(c=>c.revenue_growth_pct), y=peers.map(c=>c.pe);
-  const n=x.length, mx=x.reduce((a,b)=>a+b)/n, my=y.reduce((a,b)=>a+b)/n;
-  let sxy=0,sxx=0,syy=0; for(let i=0;i<n;i++){ sxy+=(x[i]-mx)*(y[i]-my); sxx+=(x[i]-mx)**2; syy+=(y[i]-my)**2; }
-  if(sxx===0) return null;
-  const slope=sxy/sxx, intercept=my-slope*mx, r2= syy? (sxy*sxy)/(sxx*syy):0;
-  const g = d.revenue_cagr_3yr_pct!=null?d.revenue_cagr_3yr_pct:mx;
-  const predictedPE = intercept + slope*g;
-  const actualPE = d.pe_ratio;
-  return { predictedPE, actualPE, r2, n, slope,
-    verdict: (predictedPE&&actualPE) ? (actualPE < predictedPE*0.9 ? 'Cheaper than peers justify' : actualPE > predictedPE*1.1 ? 'Richer than peers justify' : 'Fairly valued vs peers') : null };
-}
 
 // ════════════════════════════════════════════════════════
 // ONE PIPELINE — computeAnalysis(d)
@@ -1303,7 +1290,16 @@ function computeAnalysis(d){
   const promoterTrend = calcPromoterTrend(d);
   const cashConv      = calcCashConversion(d);
 
-  const score5y = scen && d.current_price ? Math.min(5, Math.max(1, scen.base5 / d.current_price)) : 2.0;
+  // Expected-value 5-yr score: probability-weighted across the three
+  // futures (25% bear / 50% base / 25% bull) plus five years of
+  // dividends — a stock with a catastrophic bear case now scores below
+  // one with the same base case but limited downside, which is how a
+  // real investor weighs risk. (For symmetric scenarios EV ≈ base, so
+  // the rating bands keep their calibration.)
+  const div5 = (d.dividend_per_share||0) * 5;
+  const score5y = scen && d.current_price
+    ? Math.min(5, Math.max(1, (0.25*scen.bear5 + 0.50*scen.base5 + 0.25*scen.bull5 + div5) / d.current_price))
+    : 2.0;
   const { r: rating, caps, base } = deriveRating(score5y, sc.composite, d, { beneish, altman, revDCF, fv, promoterTrend, cashConv });
   const dq      = validateDataConsistency(d);
   const confObj = deriveConfidence(d, dq, calcFVSpread([dcf?.fairVal, graham, lynch, ev]));
@@ -1317,14 +1313,12 @@ function computeAnalysis(d){
   const decomp  = calcReturnDecomp(d, scen);
   const trend   = calcTrendStats(d);
   const resInc  = d.business_type==='BANKING_NBFC' ? calcResidualIncome(d, waccObj?waccObj.ke:(RF+ERP)) : null;
-  const justPE  = calcJustifiedPE(d);
   const dcfCapm = dcfValueAt(d, d._g, d._wacc);
-  const dcfFlat = dcfValueAt(d, d._g, WACC);
   const passCount = cl.filter(x=>x.pass).length;
 
   return { cfg, waccObj, dcf, graham, lynch, ev, fv, scen, peg, cl, sc,
            revDCF, altman, beneish, score5y, rating, caps, base, dq, confObj,
            conf: confObj.level, why, news, ladder, fscore, decomp, trend,
-           fcfDCF, resInc, justPE, dcfCapm, dcfFlat, passCount, usedWACC: d._wacc,
+           fcfDCF, resInc, dcfCapm, passCount, usedWACC: d._wacc,
            promoterTrend, cashConv };
 }

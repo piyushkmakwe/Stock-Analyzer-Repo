@@ -6,7 +6,7 @@ function renderReport(d){
   const A = computeAnalysis(d);
   const { cfg, dcf, graham, lynch, ev, fv, scen, peg, cl, sc, revDCF, fscore,
           decomp, altman, beneish, score5y, rating, dq, confObj, conf, why,
-          news, ladder, fcfDCF, trend, resInc, justPE, dcfCapm, dcfFlat,
+          news, ladder, fcfDCF, trend, resInc, dcfCapm,
           passCount, usedWACC } = A;
   const wacc = A.waccObj, ratingCaps = A.caps;
   const _pinned = !!(mbLoadStore().entries[mbKey(d)]||{}).pinned;
@@ -232,7 +232,7 @@ function renderReport(d){
           </svg>
           <div class="g-num">${score5y.toFixed(2)}<span class="g-den">/5</span></div>
           <div class="g-lbl">${score5y>=4?'🚀 Strong Multibagger':score5y>=3?'📈 Good Growth':score5y>=2?'⚖️ Moderate':'⚠️ Limited Potential'}</div>
-          <div class="g-calc">${scen&&d.current_price?fmtINR(scen.base5,0)+' ÷ '+fmtINR(d.current_price,0)+' = '+fmtX(scen.base5/d.current_price):'Base5Y ÷ CMP'}</div>
+          <div class="g-calc">${scen&&d.current_price?'E[5Y value] ÷ '+fmtINR(d.current_price,0)+' = '+fmtX(score5y):'E[5Y] ÷ CMP'}</div>
         </div>
       </div>
       <div class="vc">
@@ -262,7 +262,7 @@ function renderReport(d){
         </div>
         <div class="vsumm">
           <strong style="color:${cfg.color}">${cfg.icon} ${cfg.name}:</strong> ${cfg.note.split('.')[0]}.<br>
-          <strong style="color:var(--t)">Growth Logic:</strong> 3Y PAT CAGR ${pct(d.profit_cagr_3yr_pct)} → regressed to ${pct(d._g*100)}/yr (sector regression ×${cfg.growthReg}, cap ${pct(cfg.maxGrowthCap*100)}). Score = Base-5Y ÷ CMP. WACC: ${(usedWACC*100).toFixed(0)}% · Terminal g: ${(TERMINAL_G*100).toFixed(1)}% · DCF margin of safety: ${(MOS*100).toFixed(0)}%.
+          <strong style="color:var(--t)">Growth Logic:</strong> 3Y PAT CAGR ${pct(d.profit_cagr_3yr_pct)} → regressed to ${pct(d._g*100)}/yr (sector regression ×${cfg.growthReg}, cap ${pct(cfg.maxGrowthCap*100)}). Score = probability-weighted 5-yr value (25/50/25 bear/base/bull + dividends) ÷ CMP. WACC: ${(usedWACC*100).toFixed(0)}% · Terminal g: ${(TERMINAL_G*100).toFixed(1)}% · DCF margin of safety: ${(MOS*100).toFixed(0)}%.
         </div>
       </div>
     </div>
@@ -283,7 +283,8 @@ No fundamental cross-check available → <span class="vl">g = ${pct(why.growth.g
         ${why.target ? `
         <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Step 2 · The 5-year return score</div>
         <div class="formula" style="margin-top:0;margin-bottom:12px">EPS ${fmtINR(why.target.eps,2)} × (1+${(why.target.g*100).toFixed(1)}%)⁵ × exit P/E ${why.target.exitPE.toFixed(1)} = <span class="vl">${fmtINR(why.target.base5,0)}</span> base-case 5-yr target
-${fmtINR(why.target.base5,0)} ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="vl">score ${why.target.score.toFixed(2)}</span> <span class="cm">(1.0 = flat, 5.0 = 5-bagger)</span></div>` : ''}
+Expected value = 25% bear ${fmtINR(why.target.bear5,0)} + 50% base ${fmtINR(why.target.base5,0)} + 25% bull ${fmtINR(why.target.bull5,0)}${why.target.div5?` + dividends ${fmtINR(why.target.div5,0)}`:''}
+÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="vl">score ${why.target.score.toFixed(2)}</span> <span class="cm">(1.0 = flat, 5.0 = 5-bagger; a bad bear case now drags the score down)</span></div>` : ''}
 
         <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Step 3 · The composite quality score</div>
         <table class="dcf-t" style="margin-bottom:12px">
@@ -416,7 +417,6 @@ ${fmtINR(why.target.base5,0)} ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="
 
         <!-- DCF sensitivity to discount rate + FCFF -->
         <div class="g3" style="margin-bottom:12px">
-          <div class="kbox"><div class="kl">EPS-DCF @ flat 12%</div><div class="kv">${dcfFlat?fmtINR(dcfFlat*(1-MOS),0):'N/A'}</div></div>
           <div class="kbox"><div class="kl">EPS-DCF @ CAPM ${wacc?(wacc.wacc*100).toFixed(1)+'%':'—'}</div><div class="kv">${dcfCapm?fmtINR(dcfCapm*(1-MOS),0):'N/A'}</div></div>
           <div class="kbox" style="border-color:rgba(64,196,255,0.25)"><div class="kl">Cash-Flow DCF (FCFF)</div><div class="kv b">${fcfDCF&&fcfDCF.perShare!=null?fmtINR(fcfDCF.perShare,0):fcfDCF&&fcfDCF.negative?'FCFF < 0':'N/A'}</div></div>
         </div>
@@ -457,11 +457,6 @@ ${fmtINR(why.target.base5,0)} ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="
             <div style="font-size:0.6rem;font-weight:800;color:var(--g);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Residual-Income Value (Bank)</div>
             <div style="font-family:'JetBrains Mono',monospace;font-size:1.1rem;font-weight:700;color:white">${fmtINR(resInc.value,0)}</div>
             <div style="font-size:0.6rem;color:var(--m);margin-top:3px">Justified P/B ${resInc.justifiedPB.toFixed(2)} = (ROE ${(resInc.impliedROE*100).toFixed(1)}% − g)/(Kₑ ${(resInc.ke*100).toFixed(1)}% − g). The correct rigorous bank valuation.</div>
-          </div>` : ''}
-          ${justPE ? `
-          <div class="kbox" style="padding:11px 13px">
-            <div style="font-size:0.6rem;font-weight:800;color:var(--p);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Peer-Regression Justified P/E</div>
-            <div style="font-size:0.68rem;color:var(--t);line-height:1.7">Peers imply a fair P/E of <strong style="color:var(--p)">${justPE.predictedPE.toFixed(1)}×</strong> at this growth; stock trades at <strong>${justPE.actualPE?.toFixed(1)||'—'}×</strong>.<br><span style="color:${/Cheaper/.test(justPE.verdict)?'var(--g)':/Richer/.test(justPE.verdict)?'var(--r)':'var(--a)'};font-weight:700">${justPE.verdict||''}</span> <span style="color:var(--m2);font-size:0.55rem">(n=${justPE.n}, R²=${justPE.r2.toFixed(2)} — small-sample, indicative)</span></div>
           </div>` : ''}
         </div>
       </div>
