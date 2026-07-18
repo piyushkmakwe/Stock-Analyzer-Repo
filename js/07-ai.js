@@ -94,50 +94,8 @@ async function loadLiveModels(){
   }catch(e){ status.textContent = '· could not load live list ('+e.message+')'; }
 }
 
-// Extract the first complete, parseable JSON object from an AI reply.
-// Models often wrap the JSON in ```fences``` or append commentary after it;
-// a greedy first-{-to-last-} regex breaks on any trailing text, so instead
-// scan with a brace-depth counter (string/escape aware) and try each
-// balanced candidate until one parses.
-function extractJSON(txt){
-  const s = txt.replace(/```json|```/g, '');
-  let start = s.indexOf('{');
-  while(start !== -1){
-    let depth = 0, inStr = false, escaped = false;
-    for(let i = start; i < s.length; i++){
-      const ch = s[i];
-      if(escaped){ escaped = false; continue; }
-      if(inStr){
-        if(ch === '\\') escaped = true;
-        else if(ch === '"') inStr = false;
-        continue;
-      }
-      if(ch === '"') inStr = true;
-      else if(ch === '{') depth++;
-      else if(ch === '}'){
-        depth--;
-        if(depth === 0){
-          try{ return JSON.parse(s.slice(start, i+1)); }
-          catch(_){ break; }   // malformed candidate — try the next '{'
-        }
-      }
-    }
-    start = s.indexOf('{', start + 1);
-  }
-  return null;
-}
 
-// ── News-only refresh: a slim AI call that re-researches ONLY recent
-// news + its impact, reusing every stored fundamental. Costs a small
-// fraction of a full analysis — this is the cheap "rerun" path.
-const NEWS_SYSTEM = `You are updating the news section of an EXISTING equity analysis for an Indian stock. Do NOT research fundamentals, prices or financials — ONLY verified news from the last 90 days.
-Searches: "[stock] news latest results order win contract" · "[stock] concall guidance management commentary" · "[stock] analyst rating upgrade downgrade".
-For each verified item judge: sentiment (Positive/Negative/Neutral), impact (High/Medium/Low), horizon (Short-term/Long-term/Both), a one-line "effect" tying it to a fundamental driver, and three business reads — profitability_impact, stability_impact, management_trust_impact (each Positive/Negative/Neutral). NEVER invent a headline; omit anything unverifiable.
-Return ONLY valid JSON, no markdown, exactly this shape:
-{
-  "recent_news": [ {"date":"Jun 2026","headline":"...","sentiment":"Positive","impact":"High","horizon":"Long-term","effect":"...","source":"...","profitability_impact":"Positive","stability_impact":"Neutral","management_trust_impact":"Neutral"} ],
-  "news_impact_assessment": { "overall_sentiment":"Positive", "short_term":{"outlook":"...","rationale":"..."}, "long_term":{"outlook":"...","rationale":"..."}, "key_catalysts":["..."], "thesis_impact":"..." }
-}`;
+// ── News-only refresh (prompt lives in js/01-prompt.js) ──
 
 async function refreshNewsOnly(){
   if(!rawData){ alert('Run or open an analysis first.'); return; }
@@ -320,26 +278,5 @@ async function analyze(){
   }
 }
 
-function showLoading(name){
-  document.getElementById('report').style.display = 'none';
-  document.getElementById('err-panel').style.display = 'none';
-  document.getElementById('loading').style.display = 'block';
-  document.getElementById('ld-name').textContent = name;
-  document.getElementById('abtn').disabled = true;
-  document.getElementById('abtn').innerHTML = '<div class="spin"></div> Analyzing…';
-  for(let i=1;i<=6;i++){
-    const el = document.getElementById('s'+i);
-    if(el) el.classList.remove('active','done');
-  }
-}
-
-function showErr(msg){
-  document.getElementById('loading').style.display = 'none';
-  document.getElementById('report').style.display = 'none';
-  document.getElementById('err-panel').style.display = 'block';
-  document.getElementById('err-msg').textContent = msg;
-  document.getElementById('abtn').disabled = false;
-  document.getElementById('abtn').innerHTML = '<i class="fas fa-calculator"></i> Run Analysis';
-}
 
 init();

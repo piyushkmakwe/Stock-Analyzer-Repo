@@ -36,7 +36,7 @@ const SECTOR_CONFIGS = {
       {lbl:'Provision Coverage > 70%',     fn:d=>(d.sd?.pcr_pct||0)>70,                       sub:d=>`PCR: ${pct(d.sd?.pcr_pct)}`},
       {lbl:'Cost-to-Income < 45%',         fn:d=>(d.sd?.cost_income_pct||99)<45,               sub:d=>`C/I: ${pct(d.sd?.cost_income_pct)}`},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(sd.nim_pct,2,5),si(sd.gross_npa_pct,0,6),s(sd.roa_pct,0.5,2.5),s(sd.casa_ratio_pct,25,55),s(sd.loan_growth_pct,5,30),si(sd.cost_income_pct,30,65),s(d.roe_pct,10,25),s(d.revenue_cagr_3yr_pct,5,30)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(sd.nim_pct,2,5),si(sd.gross_npa_pct,0,6),s(sd.roa_pct,0.5,2.5),s(sd.casa_ratio_pct,25,55),s(sd.loan_growth_pct,5,30),si(sd.cost_income_pct,30,65),s(d.roe_pct,10,25),s(d.revenue_cagr_3yr_pct,5,30)]; },
     growthReg:0.50, maxGrowthCap:0.28,
   },
   IT_SERVICES: {
@@ -64,7 +64,7 @@ const SECTOR_CONFIGS = {
       {lbl:'Management Quality > 70',       fn:d=>(d.management_track_record_score||0)>70,      sub:d=>`Score: ${d.management_track_record_score||'N/A'}/100`},
       {lbl:'Digital Transformation Tailwind',fn:d=>(d.sector_tailwind_score||0)>65,            sub:d=>`Score: ${d.sector_tailwind_score||'N/A'}/100`},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,30),s(sd.ebit_margin_pct,15,35),si(sd.attrition_rate_pct,5,25),s(sd.utilization_rate_pct,70,90),s(d.roe_pct,15,40),s(sd.fcf_conversion_pct,60,100),si(d.debt_to_equity,0,1),s(d.profit_cagr_3yr_pct,5,40)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,30),s(sd.ebit_margin_pct,15,35),si(sd.attrition_rate_pct,5,25),s(sd.utilization_rate_pct,70,90),s(d.roe_pct,15,40),s(sd.fcf_conversion_pct,60,100),si(d.debt_to_equity,0,1),s(d.profit_cagr_3yr_pct,5,40)]; },
     growthReg:0.55, maxGrowthCap:0.30,
   },
   MANUFACTURING: {
@@ -92,7 +92,7 @@ const SECTOR_CONFIGS = {
       {lbl:'PLI / Govt Scheme Beneficiary', fn:d=>(d.government_support_score||0)>65,          sub:d=>`Score: ${d.government_support_score||'N/A'}/100`},
       {lbl:'Promoter Hold > 50%, Pledge < 5%',fn:d=>(d.promoter_holding_pct||0)>50&&(d.promoter_pledge_pct||99)<5, sub:d=>`Hold: ${pct(d.promoter_holding_pct)}`},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,40),s(d.profit_cagr_3yr_pct,5,50),s(d.roe_pct,10,35),s(d.roce_pct,12,40),s(d.operating_margin_pct,8,30),si(d.debt_to_equity,0,2),s(sd.capacity_util_pct,60,95),si(sd.working_capital_days,20,120)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,40),s(d.profit_cagr_3yr_pct,5,50),s(d.roe_pct,10,35),s(d.roce_pct,12,40),s(d.operating_margin_pct,8,30),si(d.debt_to_equity,0,2),s(sd.capacity_util_pct,60,95),si(sd.working_capital_days,20,120)]; },
     growthReg:0.55, maxGrowthCap:0.35,
   },
   MINING_METALS: {
@@ -118,7 +118,7 @@ const SECTOR_CONFIGS = {
       {lbl:'Govt / Mineral Policy Support', fn:d=>(d.government_support_score||0)>60,          sub:d=>`Score: ${d.government_support_score||'N/A'}/100`},
       {lbl:'Cost of Production Declining',  fn:d=>!!(d.sd?.cost_declining),                    sub:_=>'Qualitative'},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,0,30),s(d.profit_cagr_3yr_pct,0,50),s(d.operating_margin_pct,10,45),s(d.roe_pct,8,30),si(sd.net_debt_ebitda,0,4),s(sd.production_growth_pct,0,20),s(sd.capacity_util_pct,60,95),s(sd.reserve_life_years,8,35)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,0,30),s(d.profit_cagr_3yr_pct,0,50),s(d.operating_margin_pct,10,45),s(d.roe_pct,8,30),si(sd.net_debt_ebitda,0,4),s(sd.production_growth_pct,0,20),s(sd.capacity_util_pct,60,95),s(sd.reserve_life_years,8,35)]; },
     growthReg:0.45, maxGrowthCap:0.25,
   },
   PHARMA: {
@@ -146,7 +146,7 @@ const SECTOR_CONFIGS = {
       {lbl:'ROE > 18%',                     fn:d=>(d.roe_pct||0)>18,                           sub:d=>`ROE: ${pct(d.roe_pct)}`},
       {lbl:'Promoter Holding > 50%',        fn:d=>(d.promoter_holding_pct||0)>50,              sub:d=>`Hold: ${pct(d.promoter_holding_pct)}`},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,30),s(d.profit_cagr_3yr_pct,5,40),s(d.operating_margin_pct,10,35),s(d.roe_pct,8,30),si(d.debt_to_equity,0,2),s(sd.rd_spend_pct,2,12),s(sd.domestic_growth_pct,5,25),sd.fda_compliance==='Clean'?100:20]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,30),s(d.profit_cagr_3yr_pct,5,40),s(d.operating_margin_pct,10,35),s(d.roe_pct,8,30),si(d.debt_to_equity,0,2),s(sd.rd_spend_pct,2,12),s(sd.domestic_growth_pct,5,25),sd.fda_compliance==='Clean'?100:20]; },
     growthReg:0.55, maxGrowthCap:0.28,
   },
   FMCG_CONSUMER: {
@@ -172,7 +172,7 @@ const SECTOR_CONFIGS = {
       {lbl:'Strong Brand & Distribution',   fn:d=>(d.competitive_position_score||0)>70,        sub:d=>`Score: ${d.competitive_position_score||'N/A'}/100`},
       {lbl:'Rural / Urban Consumption Tailwind',fn:d=>(d.sector_tailwind_score||0)>65,        sub:d=>`Score: ${d.sector_tailwind_score||'N/A'}/100`},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,25),s(d.profit_cagr_3yr_pct,5,30),s(d.roe_pct,15,40),s(d.operating_margin_pct,10,30),s(d.net_margin_pct,8,25),si(d.debt_to_equity,0,1),s(sd.volume_growth_pct,0,15),s(sd.gross_margin_pct,35,70)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,25),s(d.profit_cagr_3yr_pct,5,30),s(d.roe_pct,15,40),s(d.operating_margin_pct,10,30),s(d.net_margin_pct,8,25),si(d.debt_to_equity,0,1),s(sd.volume_growth_pct,0,15),s(sd.gross_margin_pct,35,70)]; },
     growthReg:0.60, maxGrowthCap:0.25,
   },
   REAL_ESTATE: {
@@ -199,7 +199,7 @@ const SECTOR_CONFIGS = {
       {lbl:'RERA Compliant Track Record',   fn:d=>!!(d.sd?.rera_compliant),                    sub:_=>'Qualitative'},
       {lbl:'Diversified Portfolio Mix',     fn:d=>!!(d.sd?.diversified_portfolio),              sub:_=>'Qualitative'},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,0,40),s(d.profit_cagr_3yr_pct,0,50),s(d.operating_margin_pct,15,40),si(d.debt_to_equity,0,2),s(sd.pre_sales_growth_pct,0,50),s(sd.collection_efficiency_pct,60,100),si(sd.unsold_inventory_months,6,36),s(d.roe_pct,8,25)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,0,40),s(d.profit_cagr_3yr_pct,0,50),s(d.operating_margin_pct,15,40),si(d.debt_to_equity,0,2),s(sd.pre_sales_growth_pct,0,50),s(sd.collection_efficiency_pct,60,100),si(sd.unsold_inventory_months,6,36),s(d.roe_pct,8,25)]; },
     growthReg:0.45, maxGrowthCap:0.30,
   },
   ENERGY_POWER: {
@@ -226,7 +226,7 @@ const SECTOR_CONFIGS = {
       {lbl:'Revenue CAGR > 15%',            fn:d=>(d.revenue_cagr_3yr_pct||0)>15,              sub:d=>`CAGR: ${pct(d.revenue_cagr_3yr_pct)}`},
       {lbl:'Promoter Hold > 50%',           fn:d=>(d.promoter_holding_pct||0)>50,               sub:d=>`Hold: ${pct(d.promoter_holding_pct)}`},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,35),s(d.profit_cagr_3yr_pct,5,40),s(d.operating_margin_pct,20,50),s(d.roce_pct,8,25),si(sd.net_debt_ebitda,0,6),s(sd.plant_load_factor_pct,55,90),s(sd.capacity_growth_pct,5,50),s(sd.renewable_mix_pct,0,100)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,35),s(d.profit_cagr_3yr_pct,5,40),s(d.operating_margin_pct,20,50),s(d.roce_pct,8,25),si(sd.net_debt_ebitda,0,6),s(sd.plant_load_factor_pct,55,90),s(sd.capacity_growth_pct,5,50),s(sd.renewable_mix_pct,0,100)]; },
     growthReg:0.55, maxGrowthCap:0.30,
   },
   CHEMICALS: {
@@ -252,7 +252,7 @@ const SECTOR_CONFIGS = {
       {lbl:'PLI / Govt Scheme Beneficiary', fn:d=>(d.government_support_score||0)>65,           sub:d=>`Score: ${d.government_support_score||'N/A'}/100`},
       {lbl:'Promoter Hold > 50%',           fn:d=>(d.promoter_holding_pct||0)>50,               sub:d=>`Hold: ${pct(d.promoter_holding_pct)}`},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,40),s(d.profit_cagr_3yr_pct,5,50),s(d.operating_margin_pct,10,35),s(d.roe_pct,10,35),si(d.debt_to_equity,0,2),s(sd.capacity_util_pct,60,95),s(sd.export_revenue_pct,20,80),s(sd.rd_spend_pct,1,8)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,40),s(d.profit_cagr_3yr_pct,5,50),s(d.operating_margin_pct,10,35),s(d.roe_pct,10,35),si(d.debt_to_equity,0,2),s(sd.capacity_util_pct,60,95),s(sd.export_revenue_pct,20,80),s(sd.rd_spend_pct,1,8)]; },
     growthReg:0.55, maxGrowthCap:0.35,
   },
   AUTO: {
@@ -278,7 +278,7 @@ const SECTOR_CONFIGS = {
       {lbl:'ROE > 15%',                     fn:d=>(d.roe_pct||0)>15,                           sub:d=>`ROE: ${pct(d.roe_pct)}`},
       {lbl:'Promoter Hold > 50%',           fn:d=>(d.promoter_holding_pct||0)>50,              sub:d=>`Hold: ${pct(d.promoter_holding_pct)}`},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,30),s(d.profit_cagr_3yr_pct,5,40),s(d.operating_margin_pct,8,25),s(d.roe_pct,10,30),si(d.debt_to_equity,0,2),s(sd.volume_growth_pct,0,20),s(sd.capacity_util_pct,55,95),si(sd.inventory_days,15,60)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,30),s(d.profit_cagr_3yr_pct,5,40),s(d.operating_margin_pct,8,25),s(d.roe_pct,10,30),si(d.debt_to_equity,0,2),s(sd.volume_growth_pct,0,20),s(sd.capacity_util_pct,55,95),si(sd.inventory_days,15,60)]; },
     growthReg:0.50, maxGrowthCap:0.28,
   },
   TELECOM: {
@@ -304,7 +304,7 @@ const SECTOR_CONFIGS = {
       {lbl:'Promoter Hold > 50%',           fn:d=>(d.promoter_holding_pct||0)>50,              sub:d=>`Hold: ${pct(d.promoter_holding_pct)}`},
       {lbl:'Sector Duopoly Position',       fn:d=>(d.competitive_position_score||0)>65,        sub:d=>`Score: ${d.competitive_position_score||'N/A'}/100`},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,3,20),s(d.profit_cagr_3yr_pct,0,30),s(sd.ebitda_margin_pct,30,55),si(sd.net_debt_ebitda,0,6),s(sd.arpu,100,300),s(sd.subscriber_growth_pct,0,10),s(sd.fiveg_rollout_pct,0,100),s(d.operating_margin_pct,5,30)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,3,20),s(d.profit_cagr_3yr_pct,0,30),s(sd.ebitda_margin_pct,30,55),si(sd.net_debt_ebitda,0,6),s(sd.arpu,100,300),s(sd.subscriber_growth_pct,0,10),s(sd.fiveg_rollout_pct,0,100),s(d.operating_margin_pct,5,30)]; },
     growthReg:0.50, maxGrowthCap:0.22,
   },
   INFRASTRUCTURE: {
@@ -330,7 +330,7 @@ const SECTOR_CONFIGS = {
       {lbl:'ROE > 15%',                     fn:d=>(d.roe_pct||0)>15,                           sub:d=>`ROE: ${pct(d.roe_pct)}`},
       {lbl:'Promoter Hold > 50%',           fn:d=>(d.promoter_holding_pct||0)>50,              sub:d=>`Hold: ${pct(d.promoter_holding_pct)}`},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,35),s(d.profit_cagr_3yr_pct,5,45),s(d.operating_margin_pct,6,20),s(d.roe_pct,8,25),si(sd.net_debt_ebitda,0,4),si(sd.working_capital_days,30,150),s(sd.book_to_bill,1.5,6),s(sd.order_inflow_growth_pct,0,40)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; const sd=d.sd||{}; return [s(d.revenue_cagr_3yr_pct,5,35),s(d.profit_cagr_3yr_pct,5,45),s(d.operating_margin_pct,6,20),s(d.roe_pct,8,25),si(sd.net_debt_ebitda,0,4),si(sd.working_capital_days,30,150),s(sd.book_to_bill,1.5,6),s(sd.order_inflow_growth_pct,0,40)]; },
     growthReg:0.55, maxGrowthCap:0.32,
   },
   DIVERSIFIED: {
@@ -352,7 +352,7 @@ const SECTOR_CONFIGS = {
       {lbl:'Promoter Hold > 50%',           fn:d=>(d.promoter_holding_pct||0)>50,              sub:d=>`Hold: ${pct(d.promoter_holding_pct)}`},
       {lbl:'Management Quality > 70',       fn:d=>(d.management_track_record_score||0)>70,     sub:d=>`Score: ${d.management_track_record_score||'N/A'}/100`},
     ],
-    fScore:d=>{ const s=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100)); const si=(v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100)); return [s(d.revenue_cagr_3yr_pct,5,30),s(d.profit_cagr_3yr_pct,5,40),s(d.operating_margin_pct,8,30),s(d.roe_pct,10,30),s(d.roce_pct,10,35),si(d.debt_to_equity,0,2),s(d.net_margin_pct,5,20),s(d.interest_coverage,1,20)]; },
+    fScore:d=>{ const s=scaleUp, si=scaleDown; return [s(d.revenue_cagr_3yr_pct,5,30),s(d.profit_cagr_3yr_pct,5,40),s(d.operating_margin_pct,8,30),s(d.roe_pct,10,30),s(d.roce_pct,10,35),si(d.debt_to_equity,0,2),s(d.net_margin_pct,5,20),s(d.interest_coverage,1,20)]; },
     growthReg:0.55, maxGrowthCap:0.28,
   },
 };
@@ -365,20 +365,7 @@ function getSectorConfig(d){
   return c;
 }
 
-// Escape untrusted text (stock names, news, AI/web-sourced strings) before
-// it is placed into innerHTML, to prevent stored/reflected XSS from
-// adversarial or malformed web content the AI may reproduce verbatim.
-function esc(s){
-  if(s==null) return '';
-  return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-}
 
-// Formatters
-function fmtINR(n,d=0){ if(n==null||isNaN(n)) return 'N/A'; return '&#8377;'+n.toFixed(d).replace(/\B(?=(\d{3})+(?!\d))/g,','); }
-function fmtP(n){ if(n==null||isNaN(n)) return 'N/A'; return (n>=0?'+':'')+n.toFixed(1)+'%'; }
-function fmtX(n){ if(n==null||isNaN(n)) return 'N/A'; return n.toFixed(2)+'x'; }
-function pct(n){ return n==null?'N/A':n.toFixed(1)+'%'; }
-function clr(v,hi=true){ if(v==null||isNaN(v)) return 'color:var(--m)'; return (v>0)===hi?'color:var(--g)':'color:var(--r)'; }
 
 // ── Estimate sustainable 5-year growth (regression to mean)
 // Fundamental (self-sustaining) EPS growth: retention ratio × ROE.
@@ -589,8 +576,7 @@ function buildChecklist(d, peg){
 const SCORE_WEIGHTS = { financial:0.30, growth:0.25, valuation:0.20, quality:0.10, management:0.10, policy:0.05 };
 function calcScores(d, peg){
   const cfg = getSectorConfig(d);
-  const sc  = (v,l,h)=>v==null?50:Math.max(0,Math.min(100,(v-l)/(h-l)*100));
-  const si  = (v,l,h)=>v==null?50:Math.max(0,Math.min(100,(h-v)/(h-l)*100));
+  const sc = scaleUp, si = scaleDown;
   const avg = arr => { const v=arr.filter(x=>x!=null&&!isNaN(x)); return v.length ? v.reduce((a,b)=>a+b,0)/v.length : null; };
   const qa  = d.qualitative_assessment || {};
 
@@ -1167,4 +1153,57 @@ function calcJustifiedPE(d){
   const actualPE = d.pe_ratio;
   return { predictedPE, actualPE, r2, n, slope,
     verdict: (predictedPE&&actualPE) ? (actualPE < predictedPE*0.9 ? 'Cheaper than peers justify' : actualPE > predictedPE*1.1 ? 'Richer than peers justify' : 'Fairly valued vs peers') : null };
+}
+
+// ════════════════════════════════════════════════════════
+// ONE PIPELINE — computeAnalysis(d)
+// The single source of truth for a full analysis run. Both the
+// on-screen report and the PDF consume this, so the two outputs can
+// never diverge. Also sets the d._* fields downstream code expects.
+// ════════════════════════════════════════════════════════
+function computeAnalysis(d){
+  d._g  = estimateGrowth(d);
+  d.sd  = d.sector_specific_data?.[d.business_type] || {};
+  const cfg = getSectorConfig(d);
+
+  // WACC first — every DCF variant below discounts at this same rate
+  const waccObj = calcWACC(d); d._wacc = waccObj ? waccObj.wacc : (cfg.wacc||WACC);
+
+  const dcf    = calcDCF(d);
+  const graham = calcGraham(d);
+  const lynch  = calcLynch(d);
+  const ev     = calcEV(d);
+  const fv     = calcFV(d, dcf, graham, lynch, ev);
+  const scen   = calcScenarios(d);
+  const peg    = calcPEG(d.pe_ratio, d.profit_cagr_3yr_pct || d.eps_cagr_3yr_pct);
+  const cl     = buildChecklist(d, peg);
+  const sc     = calcScores(d, peg);
+  const revDCF = calcReverseDCF(d);
+  const altman  = calcAltmanZ(d);
+  const beneish = calcBeneishM(d);
+
+  const score5y = scen && d.current_price ? Math.min(5, Math.max(1, scen.base5 / d.current_price)) : 2.0;
+  const { r: rating, caps, base } = deriveRating(score5y, sc.composite, d, { beneish, altman, revDCF, fv });
+  const dq      = validateDataConsistency(d);
+  const confObj = deriveConfidence(d, dq, calcFVSpread([dcf?.fairVal, graham, lynch, ev]));
+  const why     = rating==='INSUFFICIENT DATA' ? null
+                : buildRatingRationale(d, { score5y, scen, sc, rating, base, caps, fv, revDCF, altman, beneish });
+  const news    = calcNewsImpact(d, rating);
+  const ladder  = calcTargetLadder(d);
+  d._lastRating = rating;                            // snapshot for the library shelf
+
+  const fscore  = calcPiotroski(d);
+  const decomp  = calcReturnDecomp(d, scen);
+  const trend   = calcTrendStats(d);
+  const fcfDCF  = calcFCFDCF(d, d._wacc);
+  const resInc  = d.business_type==='BANKING_NBFC' ? calcResidualIncome(d, waccObj?waccObj.ke:(RF+ERP)) : null;
+  const justPE  = calcJustifiedPE(d);
+  const dcfCapm = dcfValueAt(d, d._g, d._wacc);
+  const dcfFlat = dcfValueAt(d, d._g, WACC);
+  const passCount = cl.filter(x=>x.pass).length;
+
+  return { cfg, waccObj, dcf, graham, lynch, ev, fv, scen, peg, cl, sc,
+           revDCF, altman, beneish, score5y, rating, caps, base, dq, confObj,
+           conf: confObj.level, why, news, ladder, fscore, decomp, trend,
+           fcfDCF, resInc, justPE, dcfCapm, dcfFlat, passCount, usedWACC: d._wacc };
 }

@@ -2,47 +2,14 @@
 // RENDER FUNCTION
 // ════════════════════════════════════════════════════════
 function renderReport(d){
-  d._g  = estimateGrowth(d);
-  d.sd  = d.sector_specific_data?.[d.business_type] || {};
-  const cfg = getSectorConfig(d);
-
-  // WACC first — every DCF variant below discounts at this same rate
-  const wacc = calcWACC(d); d._wacc = wacc ? wacc.wacc : (cfg.wacc||WACC);
-
-  const dcf    = calcDCF(d);
-  const graham = calcGraham(d);
-  const lynch  = calcLynch(d);
-  const ev     = calcEV(d);
-  const fv     = calcFV(d, dcf, graham, lynch, ev);
-  const scen   = calcScenarios(d);
-  const peg    = calcPEG(d.pe_ratio, d.profit_cagr_3yr_pct || d.eps_cagr_3yr_pct);
-  const cl     = buildChecklist(d, peg);
-  const sc     = calcScores(d, peg);
-  const usedWACC = d._wacc;
-  const revDCF = calcReverseDCF(d);
-  const fscore = calcPiotroski(d);
-  const decomp = calcReturnDecomp(d, scen);
-  const altman  = calcAltmanZ(d);
-  const beneish = calcBeneishM(d);
-
-  const score5y = scen && d.current_price ? Math.min(5, Math.max(1, scen.base5 / d.current_price)) : 2.0;
-  const { r: rating, caps: ratingCaps, base: ratingBase } = deriveRating(score5y, sc.composite, d, { beneish, altman, revDCF, fv });
-  const dq      = validateDataConsistency(d);
-  const confObj = deriveConfidence(d, dq, calcFVSpread([dcf?.fairVal, graham, lynch, ev]));
-  const conf    = confObj.level;
-  const why     = rating==='INSUFFICIENT DATA' ? null
-                : buildRatingRationale(d, { score5y, scen, sc, rating, base: ratingBase, caps: ratingCaps, fv, revDCF, altman, beneish });
-  const news = calcNewsImpact(d, rating);
-  const ladder = calcTargetLadder(d);
-  d._lastRating = rating;                          // snapshot for the library shelf
+  // All analysis comes from the shared pipeline — this function only renders.
+  const A = computeAnalysis(d);
+  const { cfg, dcf, graham, lynch, ev, fv, scen, peg, cl, sc, revDCF, fscore,
+          decomp, altman, beneish, score5y, rating, dq, confObj, conf, why,
+          news, ladder, fcfDCF, trend, resInc, justPE, dcfCapm, dcfFlat,
+          passCount, usedWACC } = A;
+  const wacc = A.waccObj, ratingCaps = A.caps;
   const _pinned = !!(mbLoadStore().entries[mbKey(d)]||{}).pinned;
-  const fcfDCF  = calcFCFDCF(d, d._wacc);
-  const trend   = calcTrendStats(d);
-  const resInc  = d.business_type==='BANKING_NBFC' ? calcResidualIncome(d, wacc?wacc.ke:(RF+ERP)) : null;
-  const justPE  = calcJustifiedPE(d);
-  const dcfCapm = dcfValueAt(d, d._g, d._wacc);
-  const dcfFlat = dcfValueAt(d, d._g, WACC);
-  const passCount = cl.filter(x=>x.pass).length;
   const gc = score5y>=4?'#00e676':score5y>=3?'#40c4ff':score5y>=2?'#ffab40':'#ff5252';
 
   // Gauge arc math

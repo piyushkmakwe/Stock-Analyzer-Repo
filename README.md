@@ -78,10 +78,11 @@ Verify all figures independently before making investment decisions.
 |---|---|
 | `index.html` | Page markup only — loads the modules below in order |
 | `css/styles.css` | All styling |
-| `js/01-prompt.js` | The AI research instruction + JSON schema |
-| `js/02-engine.js` | Every calculation: sector configs, valuations, forecasting, forensics, scoring, rating, rationale, validators |
+| `js/00-utils.js` | Shared utilities: HTML escaping, formatters, scaling, JSON extraction |
+| `js/01-prompt.js` | Both AI prompts: full research instruction + news-only refresh |
+| `js/02-engine.js` | Every calculation, ending in `computeAnalysis(d)` — the single pipeline both renderers consume |
 | `js/03-report.js` | On-screen report renderer |
-| `js/04-app.js` | PIN gate, analysis library (save/export/import/reminders), app state |
+| `js/04-app.js` | PIN gate, analysis library (save/export/import/reminders), app state, loading/error panels |
 | `js/05-pdf.js` | Print-native PDF report builder |
 | `js/06-feed.js` | Verified data feed (Yahoo / Screener parsers) |
 | `js/07-ai.js` | AI provider layer (Claude/Gemini), analyze flow, news-only refresh |
