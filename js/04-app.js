@@ -259,3 +259,26 @@ function copyJSON(){
   b.style.color = 'var(--g)';
   setTimeout(()=>{ b.innerHTML=orig; b.style.color=''; }, 2200);
 }
+
+// ── Loading / error panels (used by the analyze flow) ──
+function showLoading(name){
+  document.getElementById('report').style.display = 'none';
+  document.getElementById('err-panel').style.display = 'none';
+  document.getElementById('loading').style.display = 'block';
+  document.getElementById('ld-name').textContent = name;
+  document.getElementById('abtn').disabled = true;
+  document.getElementById('abtn').innerHTML = '<div class="spin"></div> Analyzing…';
+  for(let i=1;i<=6;i++){
+    const el = document.getElementById('s'+i);
+    if(el) el.classList.remove('active','done');
+  }
+}
+
+function showErr(msg){
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('report').style.display = 'none';
+  document.getElementById('err-panel').style.display = 'block';
+  document.getElementById('err-msg').textContent = msg;
+  document.getElementById('abtn').disabled = false;
+  document.getElementById('abtn').innerHTML = '<i class="fas fa-calculator"></i> Run Analysis';
+}

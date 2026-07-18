@@ -114,27 +114,12 @@ function pdfSection(no, title, intro){
 
 // ── the report document ──────────────────────────────────
 function buildPrintReport(d){
-  // Same deterministic pipeline as the on-screen report
-  d._g  = estimateGrowth(d);
-  d.sd  = d.sector_specific_data?.[d.business_type] || {};
-  const cfg = getSectorConfig(d);
-  const waccObj = calcWACC(d); d._wacc = waccObj ? waccObj.wacc : (cfg.wacc||WACC);
-  const dcf=calcDCF(d), graham=calcGraham(d), lynch=calcLynch(d), ev=calcEV(d);
-  const fv=calcFV(d,dcf,graham,lynch,ev);
-  const scen=calcScenarios(d);
-  const peg=calcPEG(d.pe_ratio, d.profit_cagr_3yr_pct||d.eps_cagr_3yr_pct);
-  const cl=buildChecklist(d,peg), sc=calcScores(d,peg);
-  const revDCF=calcReverseDCF(d), altman=calcAltmanZ(d), beneish=calcBeneishM(d);
-  const score5y = scen&&d.current_price ? Math.min(5,Math.max(1,scen.base5/d.current_price)) : 2.0;
-  const {r:rating,caps,base:ratingBase} = deriveRating(score5y,sc.composite,d,{beneish,altman,revDCF,fv});
-  const dq = validateDataConsistency(d);
-  const confObj = deriveConfidence(d, dq, calcFVSpread([dcf?.fairVal,graham,lynch,ev]));
-  const conf = confObj.level;
-  const why = rating==='INSUFFICIENT DATA' ? null
-            : buildRatingRationale(d, { score5y, scen, sc, rating, base: ratingBase, caps, fv, revDCF, altman, beneish });
-  const fscore=calcPiotroski(d), decomp=calcReturnDecomp(d,scen), news=calcNewsImpact(d,rating), trend=calcTrendStats(d);
-  const ladder = calcTargetLadder(d);
-  const passCount=cl.filter(x=>x.pass).length;
+  // Identical analysis to the on-screen report — same shared pipeline.
+  const AN = computeAnalysis(d);
+  const { cfg, waccObj, dcf, graham, lynch, ev, fv, scen, peg, cl, sc,
+          revDCF, altman, beneish, score5y, rating, caps, dq, confObj, conf,
+          why, news, ladder, fscore, decomp, trend, passCount } = AN;
+  const usedWACC = AN.usedWACC;
   const cmp=d.current_price;
   const genDate=new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'long',year:'numeric'});
   const h=d.financial_history||{};
@@ -429,10 +414,10 @@ function buildPrintReport(d){
   </div>
 
 </div>
-<scr${''}ipt>
+<script>
   // Auto-open the print dialog once fonts/layout settle; the button stays as fallback.
   window.addEventListener('load', function(){ setTimeout(function(){ try{ window.print(); }catch(e){} }, 350); });
-</scr${''}ipt>
+</script>
 </body></html>`;
 }
 

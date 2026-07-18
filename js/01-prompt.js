@@ -235,3 +235,15 @@ Return ONLY valid JSON. No markdown. No preamble. Numbers are plain (no ₹, no 
     "thesis_impact":"Net effect on the investment thesis — does recent news reinforce, challenge, or not change the model's view?"
   }
 }`;
+
+// ── News-only refresh: a slim AI call that re-researches ONLY recent
+// news + its impact, reusing every stored fundamental. Costs a small
+// fraction of a full analysis — this is the cheap "rerun" path.
+const NEWS_SYSTEM = `You are updating the news section of an EXISTING equity analysis for an Indian stock. Do NOT research fundamentals, prices or financials — ONLY verified news from the last 90 days.
+Searches: "[stock] news latest results order win contract" · "[stock] concall guidance management commentary" · "[stock] analyst rating upgrade downgrade".
+For each verified item judge: sentiment (Positive/Negative/Neutral), impact (High/Medium/Low), horizon (Short-term/Long-term/Both), a one-line "effect" tying it to a fundamental driver, and three business reads — profitability_impact, stability_impact, management_trust_impact (each Positive/Negative/Neutral). NEVER invent a headline; omit anything unverifiable.
+Return ONLY valid JSON, no markdown, exactly this shape:
+{
+  "recent_news": [ {"date":"Jun 2026","headline":"...","sentiment":"Positive","impact":"High","horizon":"Long-term","effect":"...","source":"...","profitability_impact":"Positive","stability_impact":"Neutral","management_trust_impact":"Neutral"} ],
+  "news_impact_assessment": { "overall_sentiment":"Positive", "short_term":{"outlook":"...","rationale":"..."}, "long_term":{"outlook":"...","rationale":"..."}, "key_catalysts":["..."], "thesis_impact":"..." }
+}`;
