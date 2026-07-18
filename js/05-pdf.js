@@ -167,8 +167,9 @@ function buildPrintReport(d){
   // model explanations
   const modelRows=[
     {nm:'Discounted Cash Flow (10-yr)', val:dcf?.fairVal, why:'Projects 10 years of earnings, shrinks each year back to today’s value, and applies a 10% safety discount. Best single estimate of what the business itself is worth.'},
+    {nm:'Cash-flow DCF (FCFF)', val:(AN.fcfDCF&&AN.fcfDCF.perShare>0)?AN.fcfDCF.perShare:null, why:'The same idea using actual free cash flow after reinvestment — corrects the earnings-DCF’s tendency to overvalue companies that reinvest heavily.'},
     {nm:'Peter Lynch fair value',        val:lynch,        why:'The famous fund manager’s rule of thumb: a fair P/E roughly equals the growth rate. Quick sense-check for growth stocks.'},
-    {nm:'Graham Number',                 val:graham,       why:'Benjamin Graham’s conservative floor based on earnings and book value. Growth companies usually trade above it — it marks the deep-value anchor.'},
+    {nm:'Graham Number (floor — not in blend)', val:graham, why:'Benjamin Graham’s conservative floor based on earnings and book value. Growth companies always trade above it, so it is shown as the deep-value anchor but kept OUT of the blended fair value.'},
     {nm:'EV/EBITDA vs sector',           val:ev,           why:'What the share would cost if the company traded at its sector’s average operating-profit multiple.'}
   ];
 
@@ -249,7 +250,7 @@ function buildPrintReport(d){
         <div style="font-size:9px;font-weight:800;color:${PDF_INK};margin-bottom:5px">Why ${why.rating}, exactly — the decision trail</div>
         <div style="font-size:8.5px;color:${PDF_INK2};line-height:1.65">
           <strong>1.</strong> Growth assumption: ${why.growth.histCagr!=null?`historical ${pdfPct(why.growth.histCagr)}/yr faded by the sector factor (×${why.growth.reg})`:'sector default'}${why.growth.gFund!=null?`, cross-checked against self-funded growth (retention × ROE = ${pdfPct(why.growth.gFund*100)})`:''} → <strong>${pdfPct(why.growth.g*100)}/yr</strong>.<br>
-          ${why.target?`<strong>2.</strong> 5-yr score: EPS ${pdfINR(why.target.eps,2)} × (1+${(why.target.g*100).toFixed(1)}%)⁵ × exit P/E ${why.target.exitPE.toFixed(1)} = ${pdfINR(why.target.base5)} target; ÷ price ${pdfINR(why.target.cmp)} = <strong>score ${why.target.score.toFixed(2)}</strong>.<br>`:''}
+          ${why.target?`<strong>2.</strong> 5-yr score: base target = EPS ${pdfINR(why.target.eps,2)} × (1+${(why.target.g*100).toFixed(1)}%)⁵ × exit P/E ${why.target.exitPE.toFixed(1)} = ${pdfINR(why.target.base5)}; expected value = 25% bear ${pdfINR(why.target.bear5)} + 50% base + 25% bull ${pdfINR(why.target.bull5)}${why.target.div5?` + dividends ${pdfINR(why.target.div5)}`:''}; ÷ price ${pdfINR(why.target.cmp)} = <strong>score ${why.target.score.toFixed(2)}</strong>.<br>`:''}
           <strong>3.</strong> Composite quality: ${why.pillars.map(p=>`${p.name} ${p.score.toFixed(0)}×${(p.w*100).toFixed(0)}%`).join(' + ')} = <strong>${why.composite.toFixed(0)}/100</strong>.<br>
           <strong>4.</strong> Band test: ${why.base} requires ${why.base==='AVOID'?'— no band was met (HOLD needs score ≥ 1.8 and composite > 44)':`score ≥ ${(RATING_RULES.find(r=>r[0]===why.base)||[])[1]} <strong>(${score5y.toFixed(2)} ${score5y>=((RATING_RULES.find(r=>r[0]===why.base)||[])[1]||0)?'✓':'✗'})</strong> and composite > ${(RATING_RULES.find(r=>r[0]===why.base)||[])[2]} <strong>(${sc.composite.toFixed(0)} ✓)</strong>`}.<br>
           <strong>5.</strong> Guardrails: ${why.guardrails.map(g=>`${g.name.replace(/\s*\(.*\)/,'')} <strong style="color:${g.status==='fired'?PDF_CRIT:g.status==='caution'?'#a36f00':g.status==='passed'?PDF_GOODTXT:PDF_MUT}">${g.status}</strong>`).join(' · ')}${why.base!==why.rating?` — <strong style="color:#a36f00">rating capped ${why.base} → ${why.rating}</strong>`:''}.<br>
@@ -279,7 +280,7 @@ function buildPrintReport(d){
   <table style="margin-top:10px;margin-bottom:10px">
     <tr><th style="width:150px">Method</th><th>What it means in plain words</th><th style="width:70px">Fair value</th></tr>
     ${modelRows.map(m=>`<tr><td style="font-weight:700;color:${PDF_INK}">${m.nm}</td><td>${m.why}</td><td style="font-weight:700;color:${PDF_INK}">${m.val!=null?pdfINR(m.val):'N/A'}</td></tr>`).join('')}
-    <tr><td style="font-weight:800;color:${PDF_INK}">Blended fair value</td><td>Weighted mix ${d.business_type==='BANKING_NBFC'?'(banks: price-to-book 60% + Graham 25% + Lynch 15%)':'(DCF 40% + Lynch 25% + EV/EBITDA 20% + Graham 15%)'}</td><td style="font-weight:800;color:${PDF_INK}">${fv?pdfINR(fv):'N/A'}</td></tr>
+    <tr><td style="font-weight:800;color:${PDF_INK}">Blended fair value</td><td>Weighted mix ${d.business_type==='BANKING_NBFC'?'(banks: price-to-book 60% + Graham 25% + Lynch 15%)':'(EPS-DCF 35% + cash-flow DCF 15% + Lynch 25% + EV/EBITDA 25% — Graham shown as the deep-value floor, not blended)'}</td><td style="font-weight:800;color:${PDF_INK}">${fv?pdfINR(fv):'N/A'}</td></tr>
   </table>
   ${revWords?`<p><strong>The expectations test.</strong> ${revWords}</p>`:''}
   ${decomp?`<p><strong>Where would the return come from?</strong> Of the projected base-case gain, about <strong>${(Math.max(0,Math.min(1,decomp.epsShare))*100).toFixed(0)}%</strong> comes from profits actually growing and <strong>${(Math.max(0,Math.min(1,decomp.reShare))*100).toFixed(0)}%</strong> from hoping the market pays a richer multiple. ${decomp.rerate>1.3?'That is a heavy reliance on market mood — riskier.':'Returns built on real profit growth are the durable kind.'}</p>`:''}
@@ -335,7 +336,7 @@ function buildPrintReport(d){
     ${shHold}
     <div style="border:1px solid ${PDF_GRID};border-radius:8px;padding:10px 13px;background:#fff">
       <div style="font-size:9.5px;font-weight:800;margin-bottom:5px">Why ownership matters</div>
-      <p style="font-size:8.5px">${d.promoter_holding_pct!=null?`Promoters hold <strong>${pdfPct(d.promoter_holding_pct)}</strong> — ${d.promoter_holding_pct>50?'a controlling stake, meaning the people running the company have most of their own wealth riding on it.':'less than half, so watch whether their stake rises (confidence) or keeps falling (caution).'}`:'Promoter holding data was unavailable.'} ${d.fii_holding_pct!=null?`Foreign institutions hold ${pdfPct(d.fii_holding_pct)} and domestic funds ${pdfPct(d.dii_holding_pct)} — institutional presence adds scrutiny and liquidity.`:''}</p>
+      <p style="font-size:8.5px">${d.promoter_holding_pct!=null?`Promoters hold <strong>${pdfPct(d.promoter_holding_pct)}</strong> — ${d.promoter_holding_pct>50?'a controlling stake, meaning the people running the company have most of their own wealth riding on it.':'less than half, so watch whether their stake rises (confidence) or keeps falling (caution).'}`:'Promoter holding data was unavailable.'} ${d.fii_holding_pct!=null?`Foreign institutions hold ${pdfPct(d.fii_holding_pct)} and domestic funds ${pdfPct(d.dii_holding_pct)} — institutional presence adds scrutiny and liquidity.`:''} ${AN.promoterTrend?`<strong style="color:${AN.promoterTrend.flag?PDF_CRIT:AN.promoterTrend.soft?'#a36f00':PDF_GOODTXT}">Trend check (verified): promoter stake moved ${AN.promoterTrend.from}% → ${AN.promoterTrend.to}% over about a year${AN.promoterTrend.flag?' — insiders are selling, a serious warning that caps the rating.':AN.promoterTrend.soft?' — a mild reduction worth watching.':' — stable or rising, a good sign.'}</strong>`:''} ${AN.cashConv?`Cash check: over ${AN.cashConv.years} years the company turned ₹${AN.cashConv.patSum} Cr of reported profit into ₹${AN.cashConv.cfoSum} Cr of operating cash (ratio ${AN.cashConv.ratio})${AN.cashConv.flag?' — <strong style="color:'+PDF_CRIT+'">profits are not becoming cash; treat reported earnings with suspicion.</strong>':AN.cashConv.soft?' — slightly weak conversion, monitor.':' — healthy conversion.'}`:''}</p>
     </div>
   </div>
   ${(d.management_profile?.trust_score!=null || (d.management_profile?.governance_flags||[]).length)?`
@@ -373,14 +374,14 @@ function buildPrintReport(d){
   ${ladder?`
   <div style="margin:12px 0 4px;font-size:9.5px;font-weight:800">Exit-point ladder — short &amp; long-term targets</div>
   <table style="margin-bottom:6px">
-    <tr><th>Horizon</th><th></th><th>Bear</th><th>Base — exit reference</th><th>Bull</th><th>Base return /yr</th></tr>
+    <tr><th>Horizon</th><th></th><th>Bear</th><th>Base — exit reference</th><th>Bull</th><th>Base return /yr (incl. div)</th></tr>
     ${ladder.map(r=>`<tr>
       <td style="font-weight:700;color:${PDF_INK}">${r.label}</td>
       <td style="font-size:7px;font-weight:800;color:${r.term==='short'?'#1c5cab':'#4a3aa7'}">${r.term==='short'?'SHORT-TERM':'LONG-TERM'}</td>
       <td style="color:${PDF_CRIT}">${pdfINR(r.bear.px)} (${r.bear.ret>=0?'+':''}${r.bear.ret.toFixed(0)}%)</td>
       <td style="font-weight:800;color:${PDF_INK}">${pdfINR(r.base.px)} (${r.base.ret>=0?'+':''}${r.base.ret.toFixed(0)}%)</td>
       <td style="color:${PDF_GOODTXT}">${pdfINR(r.bull.px)} (${r.bull.ret>=0?'+':''}${r.bull.ret.toFixed(0)}%)</td>
-      <td>${r.base.cagr.toFixed(1)}%</td>
+      <td>${r.base.cagrTotal.toFixed(1)}%</td>
     </tr>`).join('')}
   </table>
   <p style="font-size:8px;color:${PDF_MUT};margin-bottom:10px">The base column is the exit reference: reaching a target well ahead of schedule means the easy gains are in. Multiples re-rate gradually in this model, so near-term targets are earnings-driven. Honesty note: 6-month prices are dominated by market mood — treat short-term rows as wide-error planning references; the 2–5 year rows are where the analysis has an edge.</p>`:''}

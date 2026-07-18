@@ -58,6 +58,7 @@ async function screenerFundamentals(query){
   try{ out.quarters    = parseScreenerQuarters(html);    }catch(_){}
   try{ out.balance     = parseScreenerBalance(html);     }catch(_){}
   try{ out.shareholding= parseScreenerShareholding(html);}catch(_){}
+  try{ out.cfo_history = parseScreenerCashflow(html);   }catch(_){}
   out._page = hit.url;
   return out;
 }
@@ -144,17 +145,33 @@ function parseScreenerBalance(html){
   return { total_debt_cr: debt, book_equity_cr: equity, debt_to_equity: equity>0 ? +(debt/equity).toFixed(2) : null };
 }
 
-// Shareholding: promoter / FII / DII of the latest reported quarter
+// Shareholding: promoter / FII / DII — latest quarter PLUS the promoter
+// history, because a steadily falling promoter stake is one of the
+// strongest real-world warning signs in Indian markets.
 function parseScreenerShareholding(html){
   const sec = screenerSection(html, 'shareholding'); if(!sec) return null;
-  const { rows } = parseScreenerTable(sec);
+  const { headers, rows } = parseScreenerTable(sec);
   const lastOf = a => { if(!a) return null; for(let i=a.length-1;i>=0;i--) if(a[i]!=null) return a[i]; return null; };
+  const promSeries = (skRow(rows,'Promoters')||[]).filter(x=>x!=null);
   const out = {
     promoter_holding_pct: lastOf(skRow(rows,'Promoters')),
     fii_holding_pct:      lastOf(skRow(rows,'FIIs')),
-    dii_holding_pct:      lastOf(skRow(rows,'DIIs'))
+    dii_holding_pct:      lastOf(skRow(rows,'DIIs')),
+    promoter_history:     promSeries.length>=2 ? promSeries.slice(-8) : null,
+    promoter_quarters:    headers.slice(1).slice(-8)
   };
   return (out.promoter_holding_pct!=null) ? out : null;
+}
+
+// Cash-flow statement: operating cash flow history — for the cumulative
+// cash-conversion check (profits that never become cash are suspect).
+function parseScreenerCashflow(html){
+  const sec = screenerSection(html, 'cash-flow'); if(!sec) return null;
+  const { rows } = parseScreenerTable(sec);
+  const cfo = skRow(rows,'Cash from Operating Activity','Cash from Operating');
+  if(!cfo) return null;
+  const clean = cfo.filter(x=>x!=null);
+  return clean.length>=3 ? clean.slice(-5) : null;
 }
 // Two-stage parser: anchored to Screener's name/number spans, with a
 // loose label-proximity fallback so minor layout changes don't kill it.
@@ -234,6 +251,15 @@ async function fetchVerifiedData(query, force){
       v.structured = v.structured || {};
       v.structured.quarterly_results = sc.quarters;
     }
+    if(sc.shareholding && sc.shareholding.promoter_history){
+      v.structured = v.structured || {};
+      v.structured.promoter_history = sc.shareholding.promoter_history;
+      v.structured.promoter_quarters = sc.shareholding.promoter_quarters || [];
+    }
+    if(sc.cfo_history){
+      v.structured = v.structured || {};
+      v.structured.cfo_history = sc.cfo_history;
+    }
   }
   try{ localStorage.setItem(ck, JSON.stringify({t:Date.now(), v})); }catch(_){}
   return v;
@@ -266,6 +292,14 @@ function applyVerifiedData(d, v){
       };
     });
     applied.push('quarterly_results');
+  }
+  if(st.promoter_history){
+    d._promoterHistory = { series: st.promoter_history, quarters: st.promoter_quarters || [] };
+    applied.push('promoter_history');
+  }
+  if(st.cfo_history){
+    d._cfoHistory = st.cfo_history;
+    applied.push('cfo_history');
   }
   if(applied.length){ d.price_as_of = v.asOf; }
   return applied;
