@@ -818,6 +818,14 @@ Fair Price = (Fair_EV − Debt + Cash) ÷ Shares
             <div class="kl" style="margin-bottom:5px">Management Track Record Score</div>
             <div class="qs-row" style="margin:0"><div class="qs-bg"><div class="qs-fill" style="width:${d.management_track_record_score||50}%;background:${(d.management_track_record_score||50)>70?'var(--g)':'var(--a)'}"></div></div><div class="qs-val" style="color:${(d.management_track_record_score||50)>70?'var(--g)':'var(--a)'}">${d.management_track_record_score||'N/A'}</div></div>
           </div>
+          ${A.promoterTrend?`
+          <div class="kbox" style="margin-bottom:11px;${A.promoterTrend.flag?'background:var(--rb);border-color:rgba(255,82,82,0.25)':''}">
+            <div class="kl" style="${A.promoterTrend.flag?'color:var(--r)':''}">Promoter Stake Trend (verified, ~1 yr)</div>
+            <div style="font-size:0.78rem;font-weight:700;color:${A.promoterTrend.flag?'var(--r)':A.promoterTrend.soft?'var(--a)':'var(--g)'};margin-top:3px">
+              ${A.promoterTrend.from}% → ${A.promoterTrend.to}% (${A.promoterTrend.delta>0?'+':''}${A.promoterTrend.delta}pp)
+              ${A.promoterTrend.flag?' — insiders are selling':A.promoterTrend.soft?' — mild reduction, watch':' — stable/rising'}
+            </div>
+          </div>`:''}
           ${d.management_profile?.trust_score!=null?`
           <div style="margin-bottom:11px">
             <div class="kl" style="margin-bottom:5px">Trust &amp; Reliability Score <span style="text-transform:none;letter-spacing:0;color:var(--m2)">(governance, promises kept, integrity)</span></div>

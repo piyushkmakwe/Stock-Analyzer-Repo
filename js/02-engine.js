@@ -768,6 +768,40 @@ function deriveConfidence(d, dq, fvSpread){
   return { level, score, reasons };
 }
 
+// ── Promoter-stake trend ─────────────────────────────────
+// A steadily falling promoter stake is one of the strongest empirical
+// red flags in Indian markets — insiders sell what they no longer
+// believe in. Computed from VERIFIED Screener shareholding history
+// (multi-quarter), zero AI involvement.
+function calcPromoterTrend(d){
+  const h = d._promoterHistory;
+  if(!h || !Array.isArray(h.series) || h.series.length < 2) return null;
+  const s = h.series;
+  const span = Math.min(5, s.length);              // up to last 4 quarter-steps
+  const from = s[s.length - span], to = s[s.length - 1];
+  const delta = +(to - from).toFixed(2);
+  return { series: s, quarters: h.quarters||[], from, to, delta,
+           flag: delta <= -3,                       // >3pp sold over ~a year
+           soft: delta <= -1.5 && delta > -3 };
+}
+
+// ── Cumulative cash conversion (CFO vs PAT over ~5 years) ──
+// Piotroski checks one year; India's classic earnings-quality test is
+// cumulative — profits that never become cash across five years point
+// to channel stuffing or aggressive accounting. Verified statement data.
+function calcCashConversion(d){
+  const cfo = d._cfoHistory;
+  const pat = (d.financial_history?.pat_cr||[]).filter(x=>x!=null);
+  if(!Array.isArray(cfo) || cfo.length < 3 || pat.length < 3) return null;
+  const n = Math.min(cfo.length, pat.length);
+  const cfoSum = cfo.slice(-n).reduce((a,b)=>a+(b||0),0);
+  const patSum = pat.slice(-n).reduce((a,b)=>a+(b||0),0);
+  if(patSum <= 0) return null;                     // loss-makers: ratio meaningless
+  const ratio = +(cfoSum/patSum).toFixed(2);
+  return { years:n, cfoSum:+cfoSum.toFixed(0), patSum:+patSum.toFixed(0), ratio,
+           flag: ratio < 0.6, soft: ratio >= 0.6 && ratio < 0.8 };
+}
+
 // ── Data sufficiency gate ────────────────────────────────
 // Refuse to issue a verdict when core inputs are missing, instead
 // of silently defaulting scores to 50 and rating HOLD.
@@ -820,6 +854,11 @@ function deriveRating(score5y, composite, d, guards){
       else if(d.current_price > fv)
         capTo('BUY', 'Price is above the blended fair value of the valuation models — limited margin of safety at today’s level.');
     }
+    const { promoterTrend, cashConv } = guards;
+    if(promoterTrend && promoterTrend.flag)
+      capTo('BUY', `Promoters sold ${Math.abs(promoterTrend.delta).toFixed(1)} percentage points of their stake over the last year (${promoterTrend.from}% → ${promoterTrend.to}%) — insiders reducing exposure is a serious warning.`);
+    if(cashConv && cashConv.flag)
+      capTo('BUY', `Only ₹${cashConv.ratio} of operating cash was generated per ₹1 of reported profit over ${cashConv.years} years — profits are not turning into cash.`);
   }
   return { r, caps, base };
 }
@@ -831,7 +870,7 @@ function deriveRating(score5y, composite, d, guards){
 // no rating ever appears without its justification.
 const RATING_RULES = [ ['STRONG BUY',3.5,70], ['BUY',2.5,58], ['HOLD',1.8,44] ];
 function buildRatingRationale(d, x){
-  const { score5y, scen, sc, rating, base, caps, fv, revDCF, altman, beneish } = x;
+  const { score5y, scen, sc, rating, base, caps, fv, revDCF, altman, beneish, promoterTrend, cashConv } = x;
   const cmp = d.current_price;
   const cfg = getSectorConfig(d);
 
@@ -876,7 +915,13 @@ function buildRatingRationale(d, x){
       detail: revDCF&&revDCF.implied!=null ? `price implies ${(revDCF.implied*100).toFixed(1)}%/yr vs sustainable ${(revDCF.sustainable*100).toFixed(1)}%/yr` : '' },
     { name:'Margin-of-safety screen (price vs blended fair value)',
       status: (fv&&cmp) ? (cmp>fv*1.25?'fired':cmp>fv?'caution':'passed') : 'no data',
-      detail: (fv&&cmp) ? `price ₹${cmp.toFixed(0)} vs fair value ₹${fv.toFixed(0)} (${((cmp/fv-1)*100).toFixed(0)>0?'+':''}${((cmp/fv-1)*100).toFixed(0)}%)` : '' }
+      detail: (fv&&cmp) ? `price ₹${cmp.toFixed(0)} vs fair value ₹${fv.toFixed(0)} (${((cmp/fv-1)*100).toFixed(0)>0?'+':''}${((cmp/fv-1)*100).toFixed(0)}%)` : '' },
+    { name:'Promoter-stake trend (verified shareholding)',
+      status: promoterTrend ? (promoterTrend.flag?'fired':promoterTrend.soft?'caution':'passed') : 'no data',
+      detail: promoterTrend ? `${promoterTrend.from}% → ${promoterTrend.to}% (${promoterTrend.delta>0?'+':''}${promoterTrend.delta}pp over ~1yr)` : 'shareholding history unavailable' },
+    { name:'Cash-conversion screen (CFO vs PAT, cumulative)',
+      status: cashConv ? (cashConv.flag?'fired':cashConv.soft?'caution':'passed') : 'no data',
+      detail: cashConv ? `₹${cashConv.cfoSum} Cr cash from ₹${cashConv.patSum} Cr profit over ${cashConv.years} yrs (ratio ${cashConv.ratio})` : 'cash-flow history unavailable' }
   ];
 
   // 6. What would change the call
@@ -1255,13 +1300,15 @@ function computeAnalysis(d){
   const revDCF = calcReverseDCF(d);
   const altman  = calcAltmanZ(d);
   const beneish = calcBeneishM(d);
+  const promoterTrend = calcPromoterTrend(d);
+  const cashConv      = calcCashConversion(d);
 
   const score5y = scen && d.current_price ? Math.min(5, Math.max(1, scen.base5 / d.current_price)) : 2.0;
-  const { r: rating, caps, base } = deriveRating(score5y, sc.composite, d, { beneish, altman, revDCF, fv });
+  const { r: rating, caps, base } = deriveRating(score5y, sc.composite, d, { beneish, altman, revDCF, fv, promoterTrend, cashConv });
   const dq      = validateDataConsistency(d);
   const confObj = deriveConfidence(d, dq, calcFVSpread([dcf?.fairVal, graham, lynch, ev]));
   const why     = rating==='INSUFFICIENT DATA' ? null
-                : buildRatingRationale(d, { score5y, scen, sc, rating, base, caps, fv, revDCF, altman, beneish });
+                : buildRatingRationale(d, { score5y, scen, sc, rating, base, caps, fv, revDCF, altman, beneish, promoterTrend, cashConv });
   const news    = calcNewsImpact(d, rating);
   const ladder  = calcTargetLadder(d);
   d._lastRating = rating;                            // snapshot for the library shelf
@@ -1278,5 +1325,6 @@ function computeAnalysis(d){
   return { cfg, waccObj, dcf, graham, lynch, ev, fv, scen, peg, cl, sc,
            revDCF, altman, beneish, score5y, rating, caps, base, dq, confObj,
            conf: confObj.level, why, news, ladder, fscore, decomp, trend,
-           fcfDCF, resInc, justPE, dcfCapm, dcfFlat, passCount, usedWACC: d._wacc };
+           fcfDCF, resInc, justPE, dcfCapm, dcfFlat, passCount, usedWACC: d._wacc,
+           promoterTrend, cashConv };
 }
