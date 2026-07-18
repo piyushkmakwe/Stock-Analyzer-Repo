@@ -374,7 +374,9 @@ function getSectorConfig(d){
 // employed), which would overstate growth by roughly the tax wedge.
 function calcFundamentalGrowth(d){
   if(!d.eps_ttm || d.eps_ttm<=0) return null;
-  const payout = d.dividend_per_share!=null ? d.dividend_per_share/d.eps_ttm : 0;
+  // Unknown dividend ≠ zero dividend: assume a modest 20% payout rather
+  // than crediting 100% retention to exactly the companies with patchy data.
+  const payout = d.dividend_per_share!=null ? d.dividend_per_share/d.eps_ttm : 0.20;
   const retention = Math.max(0, Math.min(1, 1 - payout));
   const roe = (d.roe_pct ?? d.roce_pct);
   if(roe==null) return null;
@@ -383,9 +385,17 @@ function calcFundamentalGrowth(d){
 
 function estimateGrowth(d){
   const cfg = getSectorConfig(d);
-  const raw = d.eps_cagr_3yr_pct || d.profit_cagr_3yr_pct || 15;
+  let raw = d.eps_cagr_3yr_pct || d.profit_cagr_3yr_pct || 15;
+  // De-bias the covid-rebound base: when the (verified) 5-year history is
+  // available, average the claimed 3-yr CAGR with the full-history CAGR —
+  // a longer window smooths one-off base effects.
+  const pat = (d.financial_history?.pat_cr||[]).filter(x=>x!=null&&x>0);
+  if(pat.length >= 4){
+    const histCagr = (Math.pow(pat[pat.length-1]/pat[0], 1/(pat.length-1)) - 1) * 100;
+    if(isFinite(histCagr)) raw = (raw + histCagr) / 2;
+  }
   const regressed = (raw * cfg.growthReg) / 100;      // historical, faded to mean
-  const fundamental = calcFundamentalGrowth(d);        // reinvestment × ROIC
+  const fundamental = calcFundamentalGrowth(d);        // reinvestment × ROE
   // Blend the two views when both exist (self-consistency check)
   const blended = fundamental!=null ? (regressed + fundamental)/2 : regressed;
   d._gHist = regressed; d._gFund = fundamental;         // expose for display
@@ -468,9 +478,16 @@ function calcPB(d){
 }
 
 // ── Weighted Fair Value (sector-aware) ───────────────────
-// Banks/NBFCs: P/E-DCF and EV/EBITDA are not meaningful, so they
-// are excluded and the blend leans on P/B (primary) + Graham.
-function calcFV(d, dcf, graham, lynch, ev){
+// Banks/NBFCs: P/E-DCF and EV/EBITDA are not meaningful, so they are
+// excluded and the blend leans on P/B (primary) + Graham (book-value
+// businesses are what Graham's formula was built for).
+// Non-banks: Graham is EXCLUDED from the blend — for capital-light
+// growth companies it structurally reads 50-70% below market and was
+// dragging the blend against exactly the stocks this tool screens
+// for. It stays displayed as the deep-value floor. The FCFF cash-flow
+// DCF takes weight when capex data allows it, offsetting the EPS-DCF's
+// known reinvestment double-count.
+function calcFV(d, dcf, graham, lynch, ev, fcf){
   const V=[], W=[];
   const pb = calcPB(d);
   if(d.business_type==='BANKING_NBFC'){
@@ -478,10 +495,11 @@ function calcFV(d, dcf, graham, lynch, ev){
     if(graham) { V.push(graham); W.push(0.25); }
     if(lynch)  { V.push(lynch);  W.push(0.15); }
   } else {
-    if(dcf)    { V.push(dcf.fairVal); W.push(0.40); }
+    const fcfVal = (fcf && fcf.perShare>0) ? fcf.perShare : null;
+    if(dcf)    { V.push(dcf.fairVal); W.push(fcfVal!=null ? 0.35 : 0.50); }
+    if(fcfVal!=null){ V.push(fcfVal); W.push(0.15); }
     if(lynch)  { V.push(lynch);       W.push(0.25); }
-    if(graham) { V.push(graham);      W.push(0.15); }
-    if(ev)     { V.push(ev);          W.push(0.20); }
+    if(ev)     { V.push(ev);          W.push(0.25); }
   }
   if(!V.length) return null;
   const wt = W.reduce((a,b)=>a+b,0);
@@ -539,12 +557,15 @@ function calcTargetLadder(d){
     { k:'2Y', t:2,   label:'2 years',  term:'long'  },
     { k:'5Y', t:5,   label:'5 years',  term:'long'  }
   ];
+  const divYieldPct = d.dividend_per_share ? (d.dividend_per_share/cmp)*100 : 0;
   return horizons.map(h=>{
     const row = { k:h.k, t:h.t, label:h.label, term:h.term };
     for(const [nm,c] of Object.entries(cases)){
       const peT = pe + (c.endPE - pe) * (h.t/5);
       const px  = e * Math.pow(1+c.g, h.t) * peT;
-      row[nm] = { px, ret:(px/cmp-1)*100, cagr:(Math.pow(Math.max(px/cmp,0.01), 1/h.t)-1)*100 };
+      const cagr = (Math.pow(Math.max(px/cmp,0.01), 1/h.t)-1)*100;
+      // total return adds the dividend yield (held flat — conservative)
+      row[nm] = { px, ret:(px/cmp-1)*100, cagr, cagrTotal: cagr + divYieldPct };
     }
     return row;
   });
@@ -729,6 +750,10 @@ function deriveConfidence(d, dq, fvSpread){
     if(dq.failed) reasons.push(`${dq.failed} hard consistency check(s) FAILED — at least one input is wrong.`);
     if(dq.warned) reasons.push(`${dq.warned} consistency check(s) show soft mismatches.`);
     if(!dq.failed && !dq.warned && dq.ran) reasons.push(`All ${dq.ran} cross-field consistency checks passed.`);
+  }
+  if(d && d._sanitized && d._sanitized.length){
+    score -= Math.min(9, d._sanitized.length*3);
+    d._sanitized.forEach(a => reasons.push(`Input auto-corrected: ${a}.`));
   }
   const missing = d ? coreDataMissing(d).missing : 0;
   if(missing){ score -= missing*6; reasons.push(`${missing} core field(s) missing.`); }
@@ -1017,19 +1042,32 @@ function calcNewsImpact(d, rating){
 const RF = 0.07;    // risk-free (10Y GOI)
 const ERP = 0.055;  // equity risk premium
 
+// ── Small-cap size premium ───────────────────────────────
+// Small companies carry liquidity and fragility risk the CAPM beta
+// doesn't capture; without this the engine systematically overvalues
+// microcaps — the natural habitat of a multibagger screener.
+function sizePremium(d){
+  const mc = d.market_cap_cr;
+  if(mc==null || mc<=0) return 0;
+  if(mc < 5000)  return 0.015;    // < ₹5,000 Cr
+  if(mc < 20000) return 0.0075;   // < ₹20,000 Cr
+  return 0;
+}
+
 // ── CAPM + capital-structure weighted WACC ───────────────
 function calcWACC(d){
   const q = d.quant_data || {};
   if(q.beta==null) return null;                    // no beta → fall back to flat WACC
-  const ke = RF + q.beta*ERP;
+  const beta = Math.max(0.5, Math.min(2.0, q.beta));  // AI-sourced beta — clamp to sanity
+  const ke = RF + beta*ERP;
   const tax = (q.tax_rate_pct!=null?q.tax_rate_pct:25)/100;
   const kd  = (q.cost_of_debt_pct!=null?q.cost_of_debt_pct:9)/100;
   const E = d.market_cap_cr||0, D = d.total_debt_cr||0, V = E+D;
   if(V<=0) return null;
   const we=E/V, wd=D/V;
-  let wacc = we*ke + wd*kd*(1-tax);
+  let wacc = we*ke + wd*kd*(1-tax) + sizePremium(d);
   wacc = Math.max(0.07, Math.min(0.20, wacc));     // sanity clamp
-  return { wacc, ke, kd, tax, we, wd, beta:q.beta };
+  return { wacc, ke, kd, tax, we, wd, beta };
 }
 
 // ── Generalised 3-phase EPS-DCF value at a given g & WACC ──
@@ -1161,21 +1199,57 @@ function calcJustifiedPE(d){
 // on-screen report and the PDF consume this, so the two outputs can
 // never diverge. Also sets the d._* fields downstream code expects.
 // ════════════════════════════════════════════════════════
+// ── Input sanitizer ──────────────────────────────────────
+// The AI-sourced sector multiples drive the EV model, the DCF exit
+// P/E AND the scenario re-rating — one hallucinated number corrupts
+// three models. Clamp them to plausible India ranges and cross-check
+// the sector P/E against the median of the peer list the same reply
+// returned. Every adjustment is recorded on d._sanitized so the Data
+// Quality card can show it.
+function sanitizeInputs(d){
+  const adj = [];
+  const clampF = (field, lo, hi, label) => {
+    const v = d[field];
+    if(v==null || isNaN(v)) return;
+    const c = Math.max(lo, Math.min(hi, v));
+    if(c !== v){ adj.push(`${label} ${v} was implausible — clamped to ${c}`); d[field] = c; }
+  };
+  clampF('sector_pe_avg',        8,   60, 'Sector P/E');
+  clampF('sector_pb_avg',        0.5, 12, 'Sector P/B');
+  clampF('sector_ev_ebitda_avg', 4,   30, 'Sector EV/EBITDA');
+
+  // Peer-median cross-check on the sector P/E (peers exclude the target)
+  const peerPEs = (d.competitors||[]).filter(c=>c && !c.is_target && c.pe>0 && c.pe<200).map(c=>c.pe).sort((a,b)=>a-b);
+  if(peerPEs.length >= 3 && d.sector_pe_avg!=null){
+    const med = peerPEs.length%2 ? peerPEs[(peerPEs.length-1)/2] : (peerPEs[peerPEs.length/2-1]+peerPEs[peerPEs.length/2])/2;
+    if(Math.abs(d.sector_pe_avg - med)/med > 0.40){
+      adj.push(`AI sector P/E ${d.sector_pe_avg.toFixed(1)} diverged >40% from the peer median ${med.toFixed(1)} — using the peer median`);
+      d.sector_pe_avg = +med.toFixed(1);
+    }
+  }
+  d._sanitized = adj;
+  return adj;
+}
+
 function computeAnalysis(d){
+  sanitizeInputs(d);
   d._g  = estimateGrowth(d);
   d.sd  = d.sector_specific_data?.[d.business_type] || {};
   const cfg = getSectorConfig(d);
 
   // WACC first — every DCF variant below discounts at this same rate
-  const waccObj = calcWACC(d); d._wacc = waccObj ? waccObj.wacc : (cfg.wacc||WACC);
+  const waccObj = calcWACC(d); d._wacc = waccObj ? waccObj.wacc : Math.max(0.07, Math.min(0.20, (cfg.wacc||WACC) + sizePremium(d)));
 
   const dcf    = calcDCF(d);
   const graham = calcGraham(d);
   const lynch  = calcLynch(d);
   const ev     = calcEV(d);
-  const fv     = calcFV(d, dcf, graham, lynch, ev);
+  const fcfDCF = calcFCFDCF(d, d._wacc);
+  const fv     = calcFV(d, dcf, graham, lynch, ev, fcfDCF);
   const scen   = calcScenarios(d);
-  const peg    = calcPEG(d.pe_ratio, d.profit_cagr_3yr_pct || d.eps_cagr_3yr_pct);
+  // PEG against the engine's own forward growth estimate — Lynch's ratio
+  // is P/E vs FUTURE growth, not the trailing CAGR.
+  const peg    = calcPEG(d.pe_ratio, d._g!=null ? d._g*100 : (d.profit_cagr_3yr_pct || d.eps_cagr_3yr_pct));
   const cl     = buildChecklist(d, peg);
   const sc     = calcScores(d, peg);
   const revDCF = calcReverseDCF(d);
@@ -1195,7 +1269,6 @@ function computeAnalysis(d){
   const fscore  = calcPiotroski(d);
   const decomp  = calcReturnDecomp(d, scen);
   const trend   = calcTrendStats(d);
-  const fcfDCF  = calcFCFDCF(d, d._wacc);
   const resInc  = d.business_type==='BANKING_NBFC' ? calcResidualIncome(d, waccObj?waccObj.ke:(RF+ERP)) : null;
   const justPE  = calcJustifiedPE(d);
   const dcfCapm = dcfValueAt(d, d._g, d._wacc);

@@ -26,10 +26,11 @@ function renderReport(d){
 
   // Valuation models list
   const models = [
-    {nm:'DCF 10Y — 3-Phase (w=40%)', val:dcf?.fairVal, col:dcf?.fairVal>=(d.current_price||0)?'var(--g)':'var(--r)'},
+    {nm:`DCF 10Y — 3-Phase (w=${fcfDCF&&fcfDCF.perShare>0?'35':'50'}%)`, val:dcf?.fairVal, col:dcf?.fairVal>=(d.current_price||0)?'var(--g)':'var(--r)'},
+    {nm:'Cash-Flow DCF — FCFF (w=15%)', val:(fcfDCF&&fcfDCF.perShare>0)?fcfDCF.perShare:null, col:(fcfDCF&&fcfDCF.perShare>0&&fcfDCF.perShare>=(d.current_price||0))?'var(--g)':'var(--r)'},
     {nm:'Peter Lynch Fair Value (w=25%)', val:lynch,  col:lynch>=(d.current_price||0)?'var(--g)':'var(--r)'},
-    {nm:'Graham Number (w=15%)',    val:graham, col:graham>=(d.current_price||0)?'var(--g)':'var(--r)'},
-    {nm:'EV/EBITDA Relative (w=20%)', val:ev,   col:ev>=(d.current_price||0)?'var(--g)':'var(--r)'}
+    {nm:'EV/EBITDA Relative (w=25%)', val:ev,   col:ev>=(d.current_price||0)?'var(--g)':'var(--r)'},
+    {nm:'Graham Number (floor — not in blend)', val:graham, col:'var(--m)'}
   ].filter(m=>m.val!=null);
   const maxM = Math.max(...models.map(m=>m.val), d.current_price||1)*1.06;
 
@@ -320,7 +321,7 @@ ${fmtINR(why.target.base5,0)} ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="
         <details style="margin-top:12px">
           <summary><i class="fas fa-chevron-right"></i> Every algorithm used in this analysis</summary>
           <div style="margin-top:9px;font-size:0.64rem;color:var(--m);line-height:1.8">
-            <strong style="color:var(--t)">Growth:</strong> g = blend( 3-yr CAGR × sector fade factor, retention × ROE ), capped per sector · <strong style="color:var(--t)">DCF:</strong> 3-phase 10-yr EPS discounting at ${(d._wacc*100).toFixed(1)}% (CAPM when beta known, else sector WACC), years 6–10 decay linearly to terminal ${(TERMINAL_G*100).toFixed(1)}%, exit P/E = sector avg × 0.7 clamped 12–28, minus ${(MOS*100).toFixed(0)}% margin of safety · <strong style="color:var(--t)">Graham:</strong> √(22.5 × EPS × BVPS) · <strong style="color:var(--t)">Lynch:</strong> EPS × growth% (P/E capped 40) · <strong style="color:var(--t)">EV/EBITDA:</strong> (EBITDA × sector multiple − debt + cash) ÷ shares · <strong style="color:var(--t)">Blend:</strong> ${d.business_type==='BANKING_NBFC'?'P/B 60% + Graham 25% + Lynch 15% (banks)':'DCF 40% + Lynch 25% + EV/EBITDA 20% + Graham 15%'} · <strong style="color:var(--t)">Scenarios:</strong> bear/base/bull = growth ×0.45 / ×1 / ×1.35 with exit P/Es 0.8×current / drift 40% to sector / sector avg · <strong style="color:var(--t)">Composite:</strong> Financial 30% + Future Growth 25% + Valuation 20% + Quality 10% + Management 10% + Policy 5% · <strong style="color:var(--t)">Forensics:</strong> Piotroski 9-test F-score, Altman Z″ (emerging-market coefficients), Beneish 8-ratio M-score · <strong style="color:var(--t)">Reverse DCF:</strong> bisection for the growth rate that makes intrinsic value equal today's price · <strong style="color:var(--t)">Confidence:</strong> verified-field coverage + 15 cross-field consistency checks + completeness + model dispersion.
+            <strong style="color:var(--t)">Growth:</strong> g = blend( 3-yr CAGR × sector fade factor, retention × ROE ), capped per sector · <strong style="color:var(--t)">DCF:</strong> 3-phase 10-yr EPS discounting at ${(d._wacc*100).toFixed(1)}% (CAPM when beta known, else sector WACC), years 6–10 decay linearly to terminal ${(TERMINAL_G*100).toFixed(1)}%, exit P/E = sector avg × 0.7 clamped 12–28, minus ${(MOS*100).toFixed(0)}% margin of safety · <strong style="color:var(--t)">Graham:</strong> √(22.5 × EPS × BVPS) · <strong style="color:var(--t)">Lynch:</strong> EPS × growth% (P/E capped 40) · <strong style="color:var(--t)">EV/EBITDA:</strong> (EBITDA × sector multiple − debt + cash) ÷ shares · <strong style="color:var(--t)">Blend:</strong> ${d.business_type==='BANKING_NBFC'?'P/B 60% + Graham 25% + Lynch 15% (banks — book-value businesses are Graham territory)':'EPS-DCF 35% + FCFF-DCF 15% (EPS-DCF 50% when cash-flow data is missing) + Lynch 25% + EV/EBITDA 25%; Graham shown as deep-value floor only'} · <strong style="color:var(--t)">Discount rate:</strong> CAPM (beta clamped 0.5–2.0) + small-cap size premium (+1.5% below ₹5,000 Cr, +0.75% below ₹20,000 Cr) · <strong style="color:var(--t)">Scenarios:</strong> bear/base/bull = growth ×0.45 / ×1 / ×1.35 with exit P/Es 0.8×current / drift 40% to sector / sector avg · <strong style="color:var(--t)">Composite:</strong> Financial 30% + Future Growth 25% + Valuation 20% + Quality 10% + Management 10% + Policy 5% · <strong style="color:var(--t)">Forensics:</strong> Piotroski 9-test F-score, Altman Z″ (emerging-market coefficients), Beneish 8-ratio M-score · <strong style="color:var(--t)">Reverse DCF:</strong> bisection for the growth rate that makes intrinsic value equal today's price · <strong style="color:var(--t)">Confidence:</strong> verified-field coverage + 15 cross-field consistency checks + completeness + model dispersion.
           </div>
         </details>
       </div>
@@ -595,7 +596,7 @@ ${fmtINR(why.target.base5,0)} ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="
       <div class="cb">
         ${ladder ? `
         <table class="dcf-t" style="margin-bottom:10px">
-          <tr><th>Horizon</th><th></th><th style="color:var(--r)">Bear</th><th style="color:var(--a)">Base — exit reference</th><th style="color:var(--g)">Bull</th><th>Base return /yr</th></tr>
+          <tr><th>Horizon</th><th></th><th style="color:var(--r)">Bear</th><th style="color:var(--a)">Base — exit reference</th><th style="color:var(--g)">Bull</th><th>Base return /yr (incl. div)</th></tr>
           ${ladder.map(r=>`
           <tr${r.k==='1Y'?' style="border-bottom:2px solid var(--b2)"':''}>
             <td style="font-weight:700;color:var(--t)">${r.label}</td>
@@ -603,7 +604,7 @@ ${fmtINR(why.target.base5,0)} ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="
             <td style="color:var(--r)">${fmtINR(r.bear.px,0)} <span style="font-size:0.55rem">(${fmtP(r.bear.ret)})</span></td>
             <td style="color:var(--a);font-weight:700">${fmtINR(r.base.px,0)} <span style="font-size:0.55rem">(${fmtP(r.base.ret)})</span></td>
             <td style="color:var(--g)">${fmtINR(r.bull.px,0)} <span style="font-size:0.55rem">(${fmtP(r.bull.ret)})</span></td>
-            <td style="color:var(--bl)">${fmtP(r.base.cagr)}</td>
+            <td style="color:var(--bl)">${fmtP(r.base.cagrTotal)}</td>
           </tr>`).join('')}
         </table>
         <div style="font-size:0.62rem;color:var(--m);line-height:1.6;padding:8px 11px;background:var(--s2);border-radius:7px;border:1px solid var(--b);margin-bottom:14px">
@@ -635,7 +636,7 @@ ${fmtINR(why.target.base5,0)} ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="
         <div class="mavg-row">
           <div>
             <div style="font-size:0.65rem;font-weight:800;color:var(--t);text-transform:uppercase;letter-spacing:0.06em">Weighted Avg Fair Value</div>
-            <div style="font-size:0.58rem;color:var(--m);margin-top:2px">${d.business_type==='BANKING_NBFC'?'P/B×60% + Graham×25% + Lynch×15% (DCF & EV/EBITDA excluded — not meaningful for banks)':'DCF×40% + Lynch×25% + Graham×15% + EV/EBITDA×20%'}</div>
+            <div style="font-size:0.58rem;color:var(--m);margin-top:2px">${d.business_type==='BANKING_NBFC'?'P/B×60% + Graham×25% + Lynch×15% (DCF & EV/EBITDA excluded — not meaningful for banks)':'EPS-DCF×35% + FCFF×15% + Lynch×25% + EV/EBITDA×25% (Graham = floor only; EPS-DCF takes 50% when FCFF data is missing)'}</div>
           </div>
           <div style="text-align:right">
             <div style="font-family:'JetBrains Mono',monospace;font-size:1.2rem;font-weight:700;color:var(--g)">${fv?fmtINR(fv,0):'N/A'}</div>

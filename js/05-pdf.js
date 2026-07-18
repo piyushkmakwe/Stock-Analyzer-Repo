@@ -167,8 +167,9 @@ function buildPrintReport(d){
   // model explanations
   const modelRows=[
     {nm:'Discounted Cash Flow (10-yr)', val:dcf?.fairVal, why:'Projects 10 years of earnings, shrinks each year back to today’s value, and applies a 10% safety discount. Best single estimate of what the business itself is worth.'},
+    {nm:'Cash-flow DCF (FCFF)', val:(AN.fcfDCF&&AN.fcfDCF.perShare>0)?AN.fcfDCF.perShare:null, why:'The same idea using actual free cash flow after reinvestment — corrects the earnings-DCF’s tendency to overvalue companies that reinvest heavily.'},
     {nm:'Peter Lynch fair value',        val:lynch,        why:'The famous fund manager’s rule of thumb: a fair P/E roughly equals the growth rate. Quick sense-check for growth stocks.'},
-    {nm:'Graham Number',                 val:graham,       why:'Benjamin Graham’s conservative floor based on earnings and book value. Growth companies usually trade above it — it marks the deep-value anchor.'},
+    {nm:'Graham Number (floor — not in blend)', val:graham, why:'Benjamin Graham’s conservative floor based on earnings and book value. Growth companies always trade above it, so it is shown as the deep-value anchor but kept OUT of the blended fair value.'},
     {nm:'EV/EBITDA vs sector',           val:ev,           why:'What the share would cost if the company traded at its sector’s average operating-profit multiple.'}
   ];
 
@@ -279,7 +280,7 @@ function buildPrintReport(d){
   <table style="margin-top:10px;margin-bottom:10px">
     <tr><th style="width:150px">Method</th><th>What it means in plain words</th><th style="width:70px">Fair value</th></tr>
     ${modelRows.map(m=>`<tr><td style="font-weight:700;color:${PDF_INK}">${m.nm}</td><td>${m.why}</td><td style="font-weight:700;color:${PDF_INK}">${m.val!=null?pdfINR(m.val):'N/A'}</td></tr>`).join('')}
-    <tr><td style="font-weight:800;color:${PDF_INK}">Blended fair value</td><td>Weighted mix ${d.business_type==='BANKING_NBFC'?'(banks: price-to-book 60% + Graham 25% + Lynch 15%)':'(DCF 40% + Lynch 25% + EV/EBITDA 20% + Graham 15%)'}</td><td style="font-weight:800;color:${PDF_INK}">${fv?pdfINR(fv):'N/A'}</td></tr>
+    <tr><td style="font-weight:800;color:${PDF_INK}">Blended fair value</td><td>Weighted mix ${d.business_type==='BANKING_NBFC'?'(banks: price-to-book 60% + Graham 25% + Lynch 15%)':'(EPS-DCF 35% + cash-flow DCF 15% + Lynch 25% + EV/EBITDA 25% — Graham shown as the deep-value floor, not blended)'}</td><td style="font-weight:800;color:${PDF_INK}">${fv?pdfINR(fv):'N/A'}</td></tr>
   </table>
   ${revWords?`<p><strong>The expectations test.</strong> ${revWords}</p>`:''}
   ${decomp?`<p><strong>Where would the return come from?</strong> Of the projected base-case gain, about <strong>${(Math.max(0,Math.min(1,decomp.epsShare))*100).toFixed(0)}%</strong> comes from profits actually growing and <strong>${(Math.max(0,Math.min(1,decomp.reShare))*100).toFixed(0)}%</strong> from hoping the market pays a richer multiple. ${decomp.rerate>1.3?'That is a heavy reliance on market mood — riskier.':'Returns built on real profit growth are the durable kind.'}</p>`:''}
@@ -373,14 +374,14 @@ function buildPrintReport(d){
   ${ladder?`
   <div style="margin:12px 0 4px;font-size:9.5px;font-weight:800">Exit-point ladder — short &amp; long-term targets</div>
   <table style="margin-bottom:6px">
-    <tr><th>Horizon</th><th></th><th>Bear</th><th>Base — exit reference</th><th>Bull</th><th>Base return /yr</th></tr>
+    <tr><th>Horizon</th><th></th><th>Bear</th><th>Base — exit reference</th><th>Bull</th><th>Base return /yr (incl. div)</th></tr>
     ${ladder.map(r=>`<tr>
       <td style="font-weight:700;color:${PDF_INK}">${r.label}</td>
       <td style="font-size:7px;font-weight:800;color:${r.term==='short'?'#1c5cab':'#4a3aa7'}">${r.term==='short'?'SHORT-TERM':'LONG-TERM'}</td>
       <td style="color:${PDF_CRIT}">${pdfINR(r.bear.px)} (${r.bear.ret>=0?'+':''}${r.bear.ret.toFixed(0)}%)</td>
       <td style="font-weight:800;color:${PDF_INK}">${pdfINR(r.base.px)} (${r.base.ret>=0?'+':''}${r.base.ret.toFixed(0)}%)</td>
       <td style="color:${PDF_GOODTXT}">${pdfINR(r.bull.px)} (${r.bull.ret>=0?'+':''}${r.bull.ret.toFixed(0)}%)</td>
-      <td>${r.base.cagr.toFixed(1)}%</td>
+      <td>${r.base.cagrTotal.toFixed(1)}%</td>
     </tr>`).join('')}
   </table>
   <p style="font-size:8px;color:${PDF_MUT};margin-bottom:10px">The base column is the exit reference: reaching a target well ahead of schedule means the easy gains are in. Multiples re-rate gradually in this model, so near-term targets are earnings-driven. Honesty note: 6-month prices are dominated by market mood — treat short-term rows as wide-error planning references; the 2–5 year rows are where the analysis has an edge.</p>`:''}
