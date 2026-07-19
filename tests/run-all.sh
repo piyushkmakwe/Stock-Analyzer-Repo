@@ -17,7 +17,7 @@ if ! curl -s -o /dev/null --max-time 3 "$URL"; then
 fi
 
 FAIL=0
-for t in smoke-test engine-test pdf-test qual-test accuracy-test why-test library-test pin-test targets-test batch3-test; do
+for t in smoke-test engine-test pdf-test qual-test accuracy-test why-test library-test pin-test targets-test batch3-test ledger-test; do
   echo "── $t ──────────────────────────────"
   node "$t.js"
   [ $? -ne 0 ] && FAIL=1

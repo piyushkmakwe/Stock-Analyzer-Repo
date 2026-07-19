@@ -233,7 +233,7 @@ function renderShelf(){
     </div>`;
 }
 
-function init(){ populateProviders(); onProviderChange(); renderRec(); renderShelf(); }
+function init(){ populateProviders(); onProviderChange(); renderRec(); renderShelf(); renderTrackRecord(); }
 function renderRec(){
   const r = document.getElementById('rec-row');
   if(!recent.length){ r.style.display='none'; return; }
@@ -281,4 +281,128 @@ function showErr(msg){
   document.getElementById('err-msg').textContent = msg;
   document.getElementById('abtn').disabled = false;
   document.getElementById('abtn').innerHTML = '<i class="fas fa-calculator"></i> Run Analysis';
+}
+
+// ════════════════════════════════════════════════════════
+// TRACK-RECORD LEDGER — the honest accuracy scoreboard
+// Every FULL analysis appends an immutable "call" (date, price,
+// rating, targets). Every free price-update or re-analysis appends
+// an "observation". The scoreboard compares them — so the portal's
+// real-world accuracy measures itself over time at zero token cost.
+// Reopening from the library records nothing (it is not a new call).
+// ════════════════════════════════════════════════════════
+const MB_LEDGER = 'mb_ledger_v1', LEDGER_MAX_CALLS = 500, LEDGER_MAX_OBS = 4000;
+function ledgerLoad(){ try{ const l = JSON.parse(localStorage.getItem(MB_LEDGER)); return (l && Array.isArray(l.calls)) ? l : {calls:[], obs:[]}; }catch(_){ return {calls:[], obs:[]}; } }
+function ledgerSave(l){
+  if(l.calls.length > LEDGER_MAX_CALLS) l.calls = l.calls.slice(-LEDGER_MAX_CALLS);
+  if(l.obs.length   > LEDGER_MAX_OBS)   l.obs   = l.obs.slice(-LEDGER_MAX_OBS);
+  try{ localStorage.setItem(MB_LEDGER, JSON.stringify(l)); }catch(_){}
+}
+function ledgerRecordCall(d){
+  const key = mbKey(d);
+  if(!key || !d.current_price || !d._lastRating) return;
+  const lad = calcTargetLadder(d);
+  const l = ledgerLoad();
+  l.calls.push({
+    t: Date.now(), key, name: d.stock_name||key, ticker: d.ticker||'',
+    price: d.current_price, rating: d._lastRating,
+    t6m: lad ? +lad[0].base.px.toFixed(2) : null,
+    t1y: lad ? +lad[1].base.px.toFixed(2) : null,
+    t5y: lad ? +lad[3].base.px.toFixed(2) : null
+  });
+  l.obs.push({ t: Date.now(), key, price: d.current_price });
+  ledgerSave(l); renderTrackRecord();
+}
+function ledgerRecordPrice(key, price){
+  if(!key || !(price>0)) return;
+  const l = ledgerLoad();
+  l.obs.push({ t: Date.now(), key, price });
+  ledgerSave(l); renderTrackRecord();
+}
+function ledgerLatestObs(l, key, afterT){
+  let best = null;
+  for(const o of l.obs) if(o.key===key && o.t>afterT && (!best || o.t>best.t)) best = o;
+  return best;
+}
+function exportLedger(){
+  const l = ledgerLoad();
+  if(!l.calls.length){ alert('No calls recorded yet.'); return; }
+  const blob = new Blob([JSON.stringify({version:1, exportedAt:new Date().toISOString(), ...l}, null, 1)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'multibagger_track_record_' + new Date().toISOString().slice(0,10) + '.json';
+  a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+}
+
+function renderTrackRecord(){
+  const el = document.getElementById('ledger'); if(!el) return;
+  const l = ledgerLoad();
+  if(!l.calls.length){ el.style.display='none'; el.innerHTML=''; return; }
+  el.style.display = 'block';
+  const now = Date.now(), DAY = 86400000;
+  const rows = l.calls.slice().reverse().slice(0, 30).map(c=>{
+    const o = ledgerLatestObs(l, c.key, c.t);
+    const days = Math.floor((now - c.t)/DAY);
+    const ret = o ? (o.price/c.price - 1)*100 : null;
+    const annual = (o && days >= 30) ? (Math.pow(o.price/c.price, 365/Math.max(days,1))-1)*100 : null;
+    const prog1y = (o && c.t1y) ? (o.price/c.t1y)*100 : null;
+    const rc = c.rating==='STRONG BUY'||c.rating==='BUY' ? 'var(--g)' : c.rating==='HOLD' ? 'var(--a)' : 'var(--r)';
+    return `<tr>
+      <td style="color:var(--m);font-family:'JetBrains Mono',monospace">${new Date(c.t).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'2-digit'})}</td>
+      <td style="font-weight:700;color:white">${esc(c.name)}</td>
+      <td style="font-weight:800;color:${rc}">${esc(c.rating)}</td>
+      <td style="font-family:'JetBrains Mono',monospace">${fmtINR(c.price,0)}</td>
+      <td style="font-family:'JetBrains Mono',monospace">${o?fmtINR(o.price,0):'—'}</td>
+      <td>${days}d</td>
+      <td style="font-weight:700;color:${ret==null?'var(--m)':ret>=0?'var(--g)':'var(--r)'}">${ret!=null?fmtP(ret):'no update yet'}</td>
+      <td style="color:var(--m)">${annual!=null?fmtP(annual)+'/yr':'—'}</td>
+      <td style="color:${prog1y==null?'var(--m)':prog1y>=100?'var(--g)':prog1y>=70?'var(--a)':'var(--m)'}">${prog1y!=null?prog1y.toFixed(0)+'%':'—'}</td>
+    </tr>`;
+  }).join('');
+
+  // per-rating aggregates — only calls ≥30 days old with a later observation
+  const mature = l.calls.map(c=>({c, o: ledgerLatestObs(l, c.key, c.t)}))
+    .filter(x=>x.o && (now - x.c.t) >= 30*DAY);
+  const agg = {};
+  for(const {c,o} of mature){
+    const band = c.rating==='STRONG BUY'||c.rating==='BUY' ? 'BUY+' : c.rating;
+    (agg[band] = agg[band] || []).push((o.price/c.price - 1)*100);
+  }
+  const aggRows = Object.entries(agg).map(([band, rets])=>{
+    const avg = rets.reduce((a,b)=>a+b,0)/rets.length;
+    const pos = rets.filter(r=>r>0).length;
+    return `<tr>
+      <td style="font-weight:800;color:${band==='BUY+'?'var(--g)':band==='HOLD'?'var(--a)':'var(--r)'}">${band}</td>
+      <td>${rets.length}</td>
+      <td style="font-weight:700;color:${avg>=0?'var(--g)':'var(--r)'}">${fmtP(avg)}</td>
+      <td>${pos}/${rets.length} positive</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="ch">
+        <div class="ct"><i class="fas fa-chart-line" style="color:var(--g)"></i> Track Record — the portal grading itself</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span style="font-size:0.55rem;color:var(--m);font-family:'JetBrains Mono',monospace">${l.calls.length} call(s) · ${l.obs.length} price point(s)</span>
+          <button class="rtag" onclick="exportLedger()"><i class="fas fa-download"></i> Export</button>
+        </div>
+      </div>
+      <div class="cb">
+        ${mature.length ? `
+        <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">By rating band (calls ≥ 30 days old: ${mature.length})</div>
+        <table class="qtbl" style="margin-bottom:12px">
+          <tr><th>Band</th><th>Calls</th><th>Avg return so far</th><th>Hit rate</th></tr>
+          ${aggRows}
+        </table>` : ''}
+        <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Call-by-call (latest 30)</div>
+        <div style="overflow-x:auto"><table class="qtbl">
+          <tr><th>Date</th><th>Stock</th><th>Call</th><th>Price then</th><th>Latest price</th><th>Age</th><th>Return</th><th>Annualised</th><th>vs 1Y target</th></tr>
+          ${rows}
+        </table></div>
+        <div style="font-size:0.58rem;color:var(--m2);margin-top:9px;line-height:1.6">
+          Every full analysis records a call automatically; every free price-update adds a data point. <strong style="color:var(--m)">Honesty rules:</strong> judge nothing before ~20 calls and 6–12 months; annualised figures under 30 days are hidden (noise); always compare against what the Nifty did over the same period. This table is the portal's real accuracy being measured — it cannot be edited, only exported.
+        </div>
+      </div>
+    </div>`;
 }
