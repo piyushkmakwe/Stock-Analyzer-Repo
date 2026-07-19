@@ -143,6 +143,7 @@ async function updatePriceFree(){
     if(applied.length) rawData._provenance = { sources: v.sources, asOf: v.asOf, fields: applied, symbol: v.symbol||null };
     renderReport(rawData);
     storeAnalysis(rawData);
+    ledgerRecordPrice(mbKey(rawData), rawData.current_price);  // free data point for the track record
   }catch(e){
     alert('Could not reach the free data feed ('+e.message+') — prices unchanged.');
     if(btn){ btn.innerHTML = orig; btn.disabled = false; }
@@ -267,6 +268,7 @@ async function analyze(){
 
     renderReport(rawData);                                   // synchronous so render errors hit the catch below
     storeAnalysis(rawData);                                  // auto-kept — a refresh never costs tokens again
+    ledgerRecordCall(rawData);                               // immutable call for the track record
     document.getElementById('loading').style.display = 'none';
     document.getElementById('abtn').disabled = false;
     document.getElementById('abtn').innerHTML = '<i class="fas fa-calculator"></i> Run Analysis';
