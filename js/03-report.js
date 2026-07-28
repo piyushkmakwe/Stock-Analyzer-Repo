@@ -93,7 +93,8 @@ function renderReport(d){
 
   const stageIdx = {'Nascent':1,'Growth':2,'Mature':3,'Declining':4}[d.sector_detail?.sector_stage]||2;
   const twFill   = {'STRONG':5,'MODERATE':3,'WEAK':1}[d.government_support_detail?.tailwind_strength]||2;
-  const fwdEPS5  = d.eps_ttm ? d.eps_ttm * Math.pow(1+d._g, 5) : null;
+  const vEPS     = valuationEPS(d);
+  const fwdEPS5  = vEPS ? vEPS * Math.pow(1+d._g, 5) : null;
 
   const html = `<div id="ri">
     <div class="exp-row rs" style="flex-wrap:wrap">
@@ -279,6 +280,14 @@ function renderReport(d){
           <div class="kbox"><div class="kl">PEG Ratio</div><div class="kv ${peg&&peg<1.5?'g':peg&&peg<2?'a':'r'}" style="font-size:0.82rem">${peg?peg.toFixed(2):'N/A'}</div><div class="ks">&lt;1.0 ideal</div></div>
           <div class="kbox"><div class="kl">Avg Fair Value</div><div class="kv a" style="font-size:0.82rem">${fv?fmtINR(fv,0):'N/A'}</div></div>
         </div>
+        ${d._epsNorm!=null ? `
+        <div class="vsumm" style="border-color:rgba(255,171,64,0.35);margin-bottom:8px">
+          <strong style="color:var(--a)"><i class="fas fa-recycle"></i> Cyclical earnings normalized:</strong> ${cfg.name} profits swing with the commodity/demand cycle, and current TTM EPS ${fmtINR(d.eps_ttm,2)} sits far from mid-cycle. All valuation models and targets above use a <strong style="color:var(--t)">normalized EPS of ${fmtINR(d._epsNorm,2)}</strong> (5-yr average net margin × today's revenue) so the analysis doesn't buy at the top of the cycle or panic at the bottom.
+        </div>` : ''}
+        ${scen && scen.sev>1 ? `
+        <div class="vsumm" style="border-color:rgba(255,82,82,0.3);margin-bottom:8px">
+          <strong style="color:var(--r)"><i class="fas fa-wave-square"></i> Bear case hardened ×${scen.sev.toFixed(2)}:</strong> this company's revenue history is lumpy (trend R² ${d._revR2!=null?d._revR2.toFixed(2):'n/a'}), so the bear scenario assumes slower growth and a deeper de-rating than for a steady compounder. Erratic earners deserve a harsher downside — the expected-value score already reflects this.
+        </div>` : ''}
         <div class="vsumm">
           <strong style="color:${cfg.color}">${cfg.icon} ${cfg.name}:</strong> ${cfg.note.split('.')[0]}.<br>
           <strong style="color:var(--t)">Growth Logic:</strong> 3Y PAT CAGR ${pct(d.profit_cagr_3yr_pct)} → regressed to ${pct(d._g*100)}/yr (sector regression ×${cfg.growthReg}, cap ${pct(cfg.maxGrowthCap*100)}). Score = probability-weighted 5-yr value (25/50/25 bear/base/bull + dividends) ÷ CMP. WACC: ${(usedWACC*100).toFixed(0)}% · Terminal g: ${(TERMINAL_G*100).toFixed(1)}% · DCF margin of safety: ${(MOS*100).toFixed(0)}%.
@@ -301,7 +310,8 @@ No fundamental cross-check available → <span class="vl">g = ${pct(why.growth.g
 
         ${why.target ? `
         <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Step 2 · The 5-year return score</div>
-        <div class="formula" style="margin-top:0;margin-bottom:12px">EPS ${fmtINR(why.target.eps,2)} × (1+${(why.target.g*100).toFixed(1)}%)⁵ × exit P/E ${why.target.exitPE.toFixed(1)} = <span class="vl">${fmtINR(why.target.base5,0)}</span> base-case 5-yr target
+        <div class="formula" style="margin-top:0;margin-bottom:12px">EPS ${fmtINR(why.target.eps,2)}${why.target.epsBasis==='cycle-normalized'?' <span class="cm">(cycle-normalized, not TTM)</span>':''} × (1+${(why.target.g*100).toFixed(1)}%)⁵ × exit P/E ${why.target.exitPE.toFixed(1)} = <span class="vl">${fmtINR(why.target.base5,0)}</span> base-case 5-yr target${why.target.sev>1?`
+<span class="cm">Bear case hardened ×${why.target.sev.toFixed(2)} for revenue lumpiness before entering the expected value.</span>`:''}
 Expected value = 25% bear ${fmtINR(why.target.bear5,0)} + 50% base ${fmtINR(why.target.base5,0)} + 25% bull ${fmtINR(why.target.bull5,0)}${why.target.div5?` + dividends ${fmtINR(why.target.div5,0)}`:''}
 ÷ CMP ${fmtINR(why.target.cmp,0)} = <span class="vl">score ${why.target.score.toFixed(2)}</span> <span class="cm">(1.0 = flat, 5.0 = 5-bagger; a bad bear case now drags the score down)</span></div>` : ''}
 
@@ -684,12 +694,12 @@ DCF Fair Value = Σ(Discounted EPS) + Terminal PV − 10% MoS
 
 <span class="cm"># ── Model 2: Graham Number (Benjamin Graham) ──────────────</span>
 = √(22.5 × EPS × BVPS)
-= √(22.5 × <span class="vl">${(d.eps_ttm||0).toFixed(2)}</span> × <span class="vl">${(d.book_value_per_share||0).toFixed(2)}</span>)
+= √(22.5 × <span class="vl">${(vEPS||0).toFixed(2)}</span> × <span class="vl">${(d.book_value_per_share||0).toFixed(2)}</span>)${d._epsNorm!=null?' <span class="cm">(EPS is cycle-normalized)</span>':''}
 = <span class="vl">${graham?fmtINR(graham,0):'N/A'}</span>  <span class="cm">(Based on P/E≤15 AND P/B≤1.5 → 15×1.5=22.5)</span>
 
 <span class="cm"># ── Model 3: Peter Lynch Fair Value ───────────────────────</span>
 = EPS × min(GrowthRate_pct, 40)
-= <span class="vl">${(d.eps_ttm||0).toFixed(2)}</span> × <span class="vl">${Math.min((d._g||0)*100,40).toFixed(1)}</span>
+= <span class="vl">${(vEPS||0).toFixed(2)}</span> × <span class="vl">${Math.min((d._g||0)*100,40).toFixed(1)}</span>
 = <span class="vl">${lynch?fmtINR(lynch,0):'N/A'}</span>  <span class="cm">(P/E should not exceed growth rate in %)</span>
 
 <span class="cm"># ── Model 4: EV/EBITDA Relative ───────────────────────────</span>

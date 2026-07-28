@@ -402,12 +402,75 @@ function estimateGrowth(d){
   return Math.max(0, Math.min(blended, cfg.maxGrowthCap));
 }
 
+// ── Cyclical EPS normalization ───────────────────────────
+// Commodity-type sectors earn peak profits at the top of the cycle and
+// losses at the bottom — valuing them on TTM EPS buys high and sells
+// low. For these sectors, when TTM EPS deviates >25% from what the
+// 5-year AVERAGE net margin would produce on today's revenue, every
+// valuation model switches to that mid-cycle (normalized) EPS.
+// computeAnalysis() sets d._epsNorm / d._epsBasis before any model runs.
+const CYCLICAL_SECTORS = new Set(['MINING_METALS','CHEMICALS','AUTO']);
+function valuationEPS(d){ return d._epsNorm != null ? d._epsNorm : d.eps_ttm; }
+function calcNormalizedEPS(d){
+  if(!CYCLICAL_SECTORS.has(d.business_type)) return null;
+  if(!d.eps_ttm || d.eps_ttm<=0 || !(d.shares_outstanding_cr>0)) return null;
+  const h = d.financial_history || {};
+  const rev = h.revenue_cr||[], pat = h.pat_cr||[];
+  const margins = [];
+  for(let i=0;i<Math.min(rev.length, pat.length);i++)
+    if(rev[i]>0 && pat[i]!=null) margins.push(pat[i]/rev[i]);
+  if(margins.length < 4) return null;                 // need a real cycle window
+  let lastRev = null;
+  for(let i=rev.length-1;i>=0;i--) if(rev[i]>0){ lastRev=rev[i]; break; }
+  if(!lastRev) return null;
+  const avgMargin = margins.reduce((a,b)=>a+b,0)/margins.length;
+  const norm = avgMargin * lastRev / d.shares_outstanding_cr;
+  if(!(norm>0)) return null;
+  if(Math.abs(d.eps_ttm/norm - 1) <= 0.25) return null;  // TTM near mid-cycle — no adjustment
+  return { eps:+norm.toFixed(2), avgMargin, ttmMargin: margins[margins.length-1], years: margins.length };
+}
+
+// ── Volatility-aware bear case ───────────────────────────
+// A company with lumpy revenue history deserves a harsher bear case
+// than one that compounds like clockwork. Severity comes from the R²
+// of the log-linear revenue trend (verified history, set on d._revR2):
+// steady growers keep the standard bear case, erratic ones see bear
+// growth cut and the bear exit multiple pushed lower.
+function bearSeverity(d){
+  const r2 = d._revR2;
+  if(r2==null) return 1;
+  return r2>=0.90 ? 1 : r2>=0.75 ? 1.15 : r2>=0.50 ? 1.30 : 1.50;
+}
+
+// ── Shared scenario cases: ONE definition of bear/base/bull ──
+// Both calcScenarios (2Y/5Y targets, EV score) and calcTargetLadder
+// (6M/1Y/2Y/5Y exit ladder) consume this, so the two can never drift
+// apart — the ladder's 5-year row always reproduces the scenario
+// numbers exactly.
+function scenarioCases(d){
+  const e = valuationEPS(d), g = d._g;
+  if(!e || e<=0 || g==null) return null;
+  // Anchor multiple on the valuation EPS basis: when EPS is cycle-
+  // normalized the current multiple is price ÷ normalized EPS, so
+  // multiple and earnings stay on the same basis.
+  const pe = (d._epsNorm!=null && d.current_price) ? d.current_price/e
+           : (d.pe_ratio || (d.current_price && d.current_price/e) || 25);
+  const spe = d.sector_pe_avg || 30;
+  const sev = bearSeverity(d);
+  return {
+    sev, pe, spe,
+    bear: { g: (g*0.45)/sev, endPE: pe * Math.max(0.55, 0.80 - (sev-1)*0.30) },
+    base: { g,                endPE: pe + (spe-pe)*0.40 },
+    bull: { g: Math.min(g*1.35, 0.42), endPE: spe }
+  };
+}
+
 // ── Model 1: 3-Phase DCF (10-year) ──────────────────────
 // Discounts at d._wacc (CAPM-derived when beta is available, else the
 // sector-specific WACC) so the rate used in the math is the same one
 // shown in the report — previously this silently used the flat 12%.
 function calcDCF(d){
-  const eps = d.eps_ttm;
+  const eps = valuationEPS(d);
   if(!eps || eps <= 0) return null;
   const W  = d._wacc || getSectorConfig(d).wacc || WACC;
   const gH = d._g;                            // High-growth phase (yr 1-5)
@@ -442,7 +505,7 @@ function calcDCF(d){
 // Intrinsic Value = √(22.5 × EPS × BVPS)
 // Based on: P/E ≤ 15 AND P/B ≤ 1.5  →  15×1.5=22.5
 function calcGraham(d){
-  const e=d.eps_ttm, b=d.book_value_per_share;
+  const e=valuationEPS(d), b=d.book_value_per_share;
   if(!e||e<=0||!b||b<=0) return null;
   return Math.sqrt(22.5 * e * b);
 }
@@ -451,7 +514,7 @@ function calcGraham(d){
 // P/E should equal EPS growth rate (%)
 // Don't pay P/E > 2 × growth rate
 function calcLynch(d){
-  const e=d.eps_ttm;
+  const e=valuationEPS(d);
   if(!e||e<=0) return null;
   const gPct = d._g * 100;
   const fairPE = Math.min(gPct, 40);   // cap at 40×
@@ -518,10 +581,11 @@ function calcFVSpread(vals){
 
 // ── Scenario Targets ────────────────────────────────────
 function calcScenarios(d){
-  const e=d.eps_ttm, g=d._g, pe=d.pe_ratio||25, spe=d.sector_pe_avg||30;
-  if(!e||e<=0) return null;
-  const bG=g*0.45, bsG=g, buG=Math.min(g*1.35,0.42);
-  const bPE=pe*0.80, bsPE=pe+(spe-pe)*0.40, buPE=spe;
+  const e=valuationEPS(d);
+  const c=scenarioCases(d);
+  if(!e||e<=0||!c) return null;
+  const bG=c.bear.g, bsG=c.base.g, buG=c.bull.g;
+  const bPE=c.bear.endPE, bsPE=c.base.endPE, buPE=c.bull.endPE;
   return {
     bear2: e*Math.pow(1+bG,2)*bPE,
     base2: e*Math.pow(1+bsG,2)*bsPE,
@@ -529,7 +593,7 @@ function calcScenarios(d){
     bear5: e*Math.pow(1+bG,5)*bPE,
     base5: e*Math.pow(1+bsG,5)*bsPE,
     bull5: e*Math.pow(1+buG,5)*buPE,
-    bG,bsG,buG,bPE,bsPE,buPE
+    bG,bsG,buG,bPE,bsPE,buPE, sev:c.sev
   };
 }
 
@@ -542,15 +606,12 @@ function calcScenarios(d){
 // horizons are exit/trim references, not promises: market noise
 // dominates 6-month moves.
 function calcTargetLadder(d){
-  const e=d.eps_ttm, g=d._g, cmp=d.current_price;
+  const e=valuationEPS(d), g=d._g, cmp=d.current_price;
   if(!e || e<=0 || !cmp || g==null) return null;
-  const pe  = d.pe_ratio || (cmp/e);
-  const spe = d.sector_pe_avg || 30;
-  const cases = {
-    bear: { g: g*0.45,               endPE: pe*0.80 },
-    base: { g: g,                    endPE: pe + (spe-pe)*0.40 },
-    bull: { g: Math.min(g*1.35,0.42), endPE: spe }
-  };
+  const c = scenarioCases(d);
+  if(!c) return null;
+  const pe = c.pe;
+  const cases = { bear: c.bear, base: c.base, bull: c.bull };
   const horizons = [
     { k:'6M', t:0.5, label:'6 months', term:'short' },
     { k:'1Y', t:1,   label:'1 year',   term:'short' },
@@ -938,7 +999,8 @@ function buildRatingRationale(d, x){
 
   // 2. The 5-yr score arithmetic
   const div5 = (d.dividend_per_share||0) * 5;
-  const target = (scen && cmp) ? { eps: d.eps_ttm, g: d._g, exitPE: scen.bsPE,
+  const target = (scen && cmp) ? { eps: valuationEPS(d), g: d._g, exitPE: scen.bsPE,
+    epsBasis: d._epsBasis || 'ttm', sev: scen.sev || 1,
     bear5: scen.bear5, base5: scen.base5, bull5: scen.bull5, div5, cmp, score: score5y } : null;
 
   // 3. Composite build-up
@@ -1014,7 +1076,7 @@ function buildRatingRationale(d, x){
 // intrinsic value equal the current price. Implied >> sustainable = priced
 // for perfection; implied << sustainable = market is skeptical (possible value).
 function dcfImpliedValue(d, gH){
-  const eps = d.eps_ttm;
+  const eps = valuationEPS(d);
   if(!eps || eps<=0) return null;
   const W = d._wacc || getSectorConfig(d).wacc || WACC;   // same rate as the forward DCF
   let cur = eps, cumPV = 0;
@@ -1026,7 +1088,7 @@ function dcfImpliedValue(d, gH){
 }
 function calcReverseDCF(d){
   if(d.business_type==='BANKING_NBFC') return { na:true };   // EPS-DCF not meaningful for banks
-  const px=d.current_price, eps=d.eps_ttm;
+  const px=d.current_price, eps=valuationEPS(d);
   if(!px || !eps || eps<=0) return null;
   let lo=-0.10, hi=0.60;
   const vLo=dcfImpliedValue(d,lo), vHi=dcfImpliedValue(d,hi);
@@ -1078,8 +1140,11 @@ function calcPiotroski(d){
 // total multiple = (1+g)^5  ×  (exitPE / currentPE)
 //                = earnings-growth driver × multiple re-rating driver
 function calcReturnDecomp(d, scen){
-  if(!scen || !d.current_price || !d.eps_ttm || d.eps_ttm<=0) return null;
-  const curPE = d.pe_ratio || (d.current_price/d.eps_ttm);
+  const e = valuationEPS(d);
+  if(!scen || !d.current_price || !e || e<=0) return null;
+  // Same EPS basis as the scenarios, so epsMult × rerate reconciles
+  // exactly with base5 ÷ price even when EPS is cycle-normalized.
+  const curPE = d._epsNorm!=null ? d.current_price/e : (d.pe_ratio || (d.current_price/e));
   if(!curPE || curPE<=0) return null;
   const g = d._g, exitPE = scen.bsPE;
   const epsMult = Math.pow(1+g,5);
@@ -1176,7 +1241,7 @@ function calcWACC(d){
 
 // ── Generalised 3-phase EPS-DCF value at a given g & WACC ──
 function dcfValueAt(d, gH, W){
-  const eps=d.eps_ttm;
+  const eps=valuationEPS(d);
   if(!eps||eps<=0||!W) return null;
   let cur=eps, cumPV=0;
   for(let t=1;t<=5;t++){ cur*=(1+gH); cumPV+=cur/Math.pow(1+W,t); }
@@ -1333,6 +1398,15 @@ function computeAnalysis(d){
   // WACC first — every DCF variant below discounts at this same rate
   const waccObj = calcWACC(d); d._wacc = waccObj ? waccObj.wacc : Math.max(0.07, Math.min(0.20, (cfg.wacc||WACC) + sizePremium(d)));
 
+  // Trend stats BEFORE the scenario models: the bear case reads revenue
+  // steadiness (R²) from d._revR2, and the cyclical EPS normalization
+  // must be decided before any valuation model consumes valuationEPS().
+  const trend = calcTrendStats(d);
+  d._revR2 = trend ? trend.revR2 : null;
+  const epsNormObj = calcNormalizedEPS(d);
+  d._epsNorm  = epsNormObj ? epsNormObj.eps : null;
+  d._epsBasis = epsNormObj ? 'cycle-normalized' : 'ttm';
+
   const dcf    = calcDCF(d);
   const graham = calcGraham(d);
   const lynch  = calcLynch(d);
@@ -1374,7 +1448,6 @@ function computeAnalysis(d){
 
   const fscore  = calcPiotroski(d);
   const decomp  = calcReturnDecomp(d, scen);
-  const trend   = calcTrendStats(d);
   const resInc  = d.business_type==='BANKING_NBFC' ? calcResidualIncome(d, waccObj?waccObj.ke:(RF+ERP)) : null;
   const dcfCapm = dcfValueAt(d, d._g, d._wacc);
   const passCount = cl.filter(x=>x.pass && !x.na).length;
@@ -1384,5 +1457,7 @@ function computeAnalysis(d){
            revDCF, altman, beneish, score5y, rating, caps, base, dq, confObj,
            conf: confObj.level, why, news, ladder, fscore, decomp, trend,
            fcfDCF, resInc, dcfCapm, passCount, usedWACC: d._wacc,
-           promoterTrend, cashConv, horizons, clTotal };
+           promoterTrend, cashConv, horizons, clTotal,
+           epsNorm: d._epsNorm, epsBasis: d._epsBasis, epsNormObj,
+           bearSev: scen ? scen.sev : 1 };
 }

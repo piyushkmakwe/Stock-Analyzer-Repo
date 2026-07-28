@@ -189,6 +189,49 @@ function saveCurrent(){
   storeAnalysis(rawData, !(cur && cur.pinned));
   renderReport(rawData);   // refresh the Save button label
 }
+// ── One-click free refresh of every saved analysis ────────
+// Loops the library, pulls the live Yahoo quote for each entry (no AI,
+// no tokens), updates the stored price and feeds the track-record
+// ledger an observation per stock — so the scoreboard stays current
+// even for stocks you haven't reopened in months.
+let _refreshingAll = false;
+async function refreshAllPrices(){
+  if(_refreshingAll) return;
+  const s = mbLoadStore();
+  const entries = Object.entries(s.entries);
+  if(!entries.length){ alert('No saved analyses to refresh yet.'); return; }
+  _refreshingAll = true;
+  const btn = document.getElementById('btn-refresh-all');
+  const orig = btn ? btn.innerHTML : null;
+  if(btn) btn.disabled = true;
+  // One benchmark fetch for the whole batch — every observation shares it
+  const bm = (typeof fetchNifty==='function') ? await fetchNifty().catch(()=>null) : null;
+  let ok = 0, fail = 0, i = 0;
+  for(const [k, e] of entries){
+    i++;
+    if(btn) btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${i}/${entries.length}…`;
+    try{
+      const q = (e.data && (e.data._query || e.data.ticker)) || e.name;
+      const yq = await yahooQuote(q);
+      if(yq && yq.price>0){
+        e.price = yq.price;
+        if(e.data){ e.data.current_price = yq.price; e.data.price_as_of = yq.asOf; }
+        ledgerRecordPrice(k, yq.price, bm);
+        ok++;
+      } else fail++;
+    }catch(_){ fail++; }
+    await new Promise(r=>setTimeout(r, 350));   // gentle on the free feed
+  }
+  mbSaveStore(s); renderShelf();
+  // If the refreshed batch includes the report on screen, recompute it
+  if(rawData && s.entries[mbKey(rawData)]){
+    rawData.current_price = s.entries[mbKey(rawData)].price;
+    try{ renderReport(rawData); }catch(_){}
+  }
+  if(btn){ btn.innerHTML = orig; btn.disabled = false; }
+  _refreshingAll = false;
+  alert(`Free price refresh done: ${ok} of ${entries.length} updated${fail?`, ${fail} unreachable`:''}. Each update is a new data point in the track record below.`);
+}
 function mbAge(t){
   const m = Math.floor((Date.now()-t)/60000);
   if(m<1) return 'just now';
@@ -207,6 +250,7 @@ function renderShelf(){
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
       <div style="font-size:0.58rem;font-weight:700;color:var(--m);letter-spacing:0.1em;text-transform:uppercase"><i class="fas fa-box-archive"></i> Analysis Library — reopen without spending tokens</div>
       <div style="display:flex;gap:6px">
+        <button class="rtag" id="btn-refresh-all" onclick="refreshAllPrices()" style="color:var(--g);border-color:rgba(0,230,118,0.3)"><i class="fas fa-bolt"></i> Refresh all prices (free)</button>
         <button class="rtag" onclick="exportLibrary()"><i class="fas fa-download"></i> Export backup</button>
         <button class="rtag" onclick="importLibrary()"><i class="fas fa-upload"></i> Import</button>
       </div>
@@ -298,29 +342,44 @@ function ledgerSave(l){
   if(l.obs.length   > LEDGER_MAX_OBS)   l.obs   = l.obs.slice(-LEDGER_MAX_OBS);
   try{ localStorage.setItem(MB_LEDGER, JSON.stringify(l)); }catch(_){}
 }
+// Benchmark back-fill: the Nifty level arrives async (free Yahoo call),
+// so calls/observations are written immediately with bm:null and patched
+// in place once the level lands — the ledger never waits on the network.
+function ledgerPatchBenchmark(t, key, bm){
+  if(!(bm>0)) return;
+  const l = ledgerLoad();
+  let hit = false;
+  for(const c of l.calls) if(c.t===t && c.key===key && c.bm==null){ c.bm = bm; hit = true; }
+  for(const o of l.obs)   if(o.t===t && o.key===key && o.bm==null){ o.bm = bm; hit = true; }
+  if(hit){ ledgerSave(l); renderTrackRecord(); }
+}
 function ledgerRecordCall(d){
   const key = mbKey(d);
   if(!key || !d.current_price || !d._lastRating) return;
   const lad = calcTargetLadder(d);
   const hz = d._horizons || null;
   const l = ledgerLoad();
+  const t = Date.now();
   l.calls.push({
-    t: Date.now(), key, name: d.stock_name||key, ticker: d.ticker||'',
-    price: d.current_price, rating: d._lastRating,
+    t, key, name: d.stock_name||key, ticker: d.ticker||'',
+    price: d.current_price, rating: d._lastRating, bm: null,
     r1y: hz ? (hz.find(h=>h.k==='1Y')||{}).rating : null,
     r2y: hz ? (hz.find(h=>h.k==='2Y')||{}).rating : null,
     t6m: lad ? +lad[0].base.px.toFixed(2) : null,
     t1y: lad ? +lad[1].base.px.toFixed(2) : null,
     t5y: lad ? +lad[3].base.px.toFixed(2) : null
   });
-  l.obs.push({ t: Date.now(), key, price: d.current_price });
+  l.obs.push({ t, key, price: d.current_price, bm: null });
   ledgerSave(l); renderTrackRecord();
+  if(typeof fetchNifty==='function') fetchNifty().then(bm=>ledgerPatchBenchmark(t, key, bm)).catch(()=>{});
 }
-function ledgerRecordPrice(key, price){
+function ledgerRecordPrice(key, price, bm){
   if(!key || !(price>0)) return;
   const l = ledgerLoad();
-  l.obs.push({ t: Date.now(), key, price });
+  const t = Date.now();
+  l.obs.push({ t, key, price, bm: bm>0 ? bm : null });
   ledgerSave(l); renderTrackRecord();
+  if(!(bm>0) && typeof fetchNifty==='function') fetchNifty().then(b=>ledgerPatchBenchmark(t, key, b)).catch(()=>{});
 }
 function ledgerLatestObs(l, key, afterT){
   let best = null;
@@ -343,12 +402,18 @@ function renderTrackRecord(){
   if(!l.calls.length){ el.style.display='none'; el.innerHTML=''; return; }
   el.style.display = 'block';
   const now = Date.now(), DAY = 86400000;
+  // Excess return vs the Nifty over the same window — beating a fixed %
+  // means little if the whole market did the same. Needs the benchmark
+  // level at BOTH ends (call time and latest observation).
+  const excessOf = (c, o) => (o && c.bm>0 && o.bm>0)
+    ? (o.price/c.price - 1)*100 - (o.bm/c.bm - 1)*100 : null;
   const rows = l.calls.slice().reverse().slice(0, 30).map(c=>{
     const o = ledgerLatestObs(l, c.key, c.t);
     const days = Math.floor((now - c.t)/DAY);
     const ret = o ? (o.price/c.price - 1)*100 : null;
     const annual = (o && days >= 30) ? (Math.pow(o.price/c.price, 365/Math.max(days,1))-1)*100 : null;
     const prog1y = (o && c.t1y) ? (o.price/c.t1y)*100 : null;
+    const exc = excessOf(c, o);
     const rc = c.rating==='STRONG BUY'||c.rating==='BUY' ? 'var(--g)' : c.rating==='HOLD' ? 'var(--a)' : 'var(--r)';
     return `<tr>
       <td style="color:var(--m);font-family:'JetBrains Mono',monospace">${new Date(c.t).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'2-digit'})}</td>
@@ -358,6 +423,7 @@ function renderTrackRecord(){
       <td style="font-family:'JetBrains Mono',monospace">${o?fmtINR(o.price,0):'—'}</td>
       <td>${days}d</td>
       <td style="font-weight:700;color:${ret==null?'var(--m)':ret>=0?'var(--g)':'var(--r)'}">${ret!=null?fmtP(ret):'no update yet'}</td>
+      <td style="font-weight:700;color:${exc==null?'var(--m)':exc>=0?'var(--g)':'var(--r)'}">${exc!=null?fmtP(exc):'—'}</td>
       <td style="color:var(--m)">${annual!=null?fmtP(annual)+'/yr':'—'}</td>
       <td style="color:${prog1y==null?'var(--m)':prog1y>=100?'var(--g)':prog1y>=70?'var(--a)':'var(--m)'}">${prog1y!=null?prog1y.toFixed(0)+'%':'—'}</td>
     </tr>`;
@@ -369,16 +435,21 @@ function renderTrackRecord(){
   const agg = {};
   for(const {c,o} of mature){
     const band = c.rating==='STRONG BUY'||c.rating==='BUY' ? 'BUY+' : c.rating;
-    (agg[band] = agg[band] || []).push((o.price/c.price - 1)*100);
+    (agg[band] = agg[band] || []).push({ ret:(o.price/c.price - 1)*100, exc: excessOf(c, o) });
   }
-  const aggRows = Object.entries(agg).map(([band, rets])=>{
+  const aggRows = Object.entries(agg).map(([band, xs])=>{
+    const rets = xs.map(x=>x.ret);
     const avg = rets.reduce((a,b)=>a+b,0)/rets.length;
     const pos = rets.filter(r=>r>0).length;
+    const excs = xs.map(x=>x.exc).filter(e=>e!=null);
+    const avgExc = excs.length ? excs.reduce((a,b)=>a+b,0)/excs.length : null;
+    const beat = excs.length ? excs.filter(e=>e>0).length : null;
     return `<tr>
       <td style="font-weight:800;color:${band==='BUY+'?'var(--g)':band==='HOLD'?'var(--a)':'var(--r)'}">${band}</td>
       <td>${rets.length}</td>
       <td style="font-weight:700;color:${avg>=0?'var(--g)':'var(--r)'}">${fmtP(avg)}</td>
-      <td>${pos}/${rets.length} positive</td>
+      <td style="font-weight:700;color:${avgExc==null?'var(--m)':avgExc>=0?'var(--g)':'var(--r)'}">${avgExc!=null?fmtP(avgExc):'—'}</td>
+      <td>${pos}/${rets.length} positive${beat!=null?` · ${beat}/${excs.length} beat Nifty`:''}</td>
     </tr>`;
   }).join('');
 
@@ -395,16 +466,16 @@ function renderTrackRecord(){
         ${mature.length ? `
         <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">By rating band (calls ≥ 30 days old: ${mature.length})</div>
         <table class="qtbl" style="margin-bottom:12px">
-          <tr><th>Band</th><th>Calls</th><th>Avg return so far</th><th>Hit rate</th></tr>
+          <tr><th>Band</th><th>Calls</th><th>Avg return so far</th><th>Avg vs Nifty</th><th>Hit rate</th></tr>
           ${aggRows}
         </table>` : ''}
         <div style="font-size:0.6rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Call-by-call (latest 30)</div>
         <div style="overflow-x:auto"><table class="qtbl">
-          <tr><th>Date</th><th>Stock</th><th>Call</th><th>Price then</th><th>Latest price</th><th>Age</th><th>Return</th><th>Annualised</th><th>vs 1Y target</th></tr>
+          <tr><th>Date</th><th>Stock</th><th>Call</th><th>Price then</th><th>Latest price</th><th>Age</th><th>Return</th><th>vs Nifty</th><th>Annualised</th><th>vs 1Y target</th></tr>
           ${rows}
         </table></div>
         <div style="font-size:0.58rem;color:var(--m2);margin-top:9px;line-height:1.6">
-          Every full analysis records a call automatically; every free price-update adds a data point. <strong style="color:var(--m)">Honesty rules:</strong> judge nothing before ~20 calls and 6–12 months; annualised figures under 30 days are hidden (noise); always compare against what the Nifty did over the same period. This table is the portal's real accuracy being measured — it cannot be edited, only exported.
+          Every full analysis records a call automatically; every free price-update adds a data point, and the Nifty 50 level is stored alongside so the <strong style="color:var(--m)">vs Nifty</strong> column shows the return the call earned OVER the market — the only figure that proves stock-picking skill. <strong style="color:var(--m)">Honesty rules:</strong> judge nothing before ~20 calls and 6–12 months; annualised figures under 30 days are hidden (noise). This table is the portal's real accuracy being measured — it cannot be edited, only exported. Use <em>Refresh all prices</em> in the library above to add a fresh data point for every saved stock in one click.
         </div>
       </div>
     </div>`;
