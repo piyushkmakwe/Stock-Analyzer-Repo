@@ -118,7 +118,7 @@ function buildPrintReport(d){
   const AN = computeAnalysis(d);
   const { cfg, waccObj, dcf, graham, lynch, ev, fv, scen, peg, cl, sc,
           revDCF, altman, beneish, score5y, rating, caps, dq, confObj, conf,
-          why, news, ladder, fscore, decomp, trend, passCount, horizons } = AN;
+          why, news, ladder, fscore, decomp, trend, passCount, clTotal, horizons } = AN;
   const usedWACC = AN.usedWACC;
   const cmp=d.current_price;
   const genDate=new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'long',year:'numeric'});
@@ -241,7 +241,7 @@ function buildPrintReport(d){
     <div style="flex:1;border:2px solid ${ratingTone};border-radius:10px;padding:13px 16px">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
         <span style="background:${ratingTone};color:#fff;font-size:13px;font-weight:800;padding:5px 15px;border-radius:7px">${rating}</span>
-        <span style="font-size:9px;color:${PDF_INK2}">Confidence: <strong>${conf}</strong> · Quality score <strong>${sc.composite.toFixed(0)}/100</strong> · Checklist <strong>${passCount}/10</strong></span>
+        <span style="font-size:9px;color:${PDF_INK2}">Confidence: <strong>${conf}</strong> · Quality score <strong>${sc.composite.toFixed(0)}/100</strong> · Checklist <strong>${passCount}/${clTotal}</strong></span>
       </div>
       ${horizons?`
       <div style="display:flex;gap:8px;margin-bottom:8px">
@@ -411,7 +411,7 @@ function buildPrintReport(d){
   <div style="border:1px solid ${PDF_GRID};border-radius:8px;padding:10px 13px;margin-bottom:12px;background:#fff">
     <div style="font-size:9.5px;font-weight:800;margin-bottom:4px">What would change our view</div>
     <p style="font-size:8.5px;margin-bottom:0">${[
-      cl.filter(x=>!x.pass).length?`The company currently fails ${cl.filter(x=>!x.pass).length} of 10 sector checklist items (${cl.filter(x=>!x.pass).slice(0,3).map(x=>x.lbl).join('; ')}${cl.filter(x=>!x.pass).length>3?'; …':''}) — clearing these would strengthen the thesis.`:'The company passes the full sector checklist — deterioration in any item would be the first warning.',
+      cl.filter(x=>!x.pass&&!x.na).length?`The company currently fails ${cl.filter(x=>!x.pass&&!x.na).length} of ${clTotal} sector checklist items (${cl.filter(x=>!x.pass&&!x.na).slice(0,3).map(x=>x.lbl).join('; ')}${cl.filter(x=>!x.pass&&!x.na).length>3?'; …':''}) — clearing these would strengthen the thesis.`:'The company passes the full sector checklist — deterioration in any item would be the first warning.',
       caps&&caps.length?'Resolving the guardrail warnings on page 1 would lift the rating cap.':'',
       'A material fall in promoter holding, a spike in pledging, or margin decline across two consecutive quarters would each warrant a re-run of this analysis.'
     ].filter(Boolean).join(' ')}</p>

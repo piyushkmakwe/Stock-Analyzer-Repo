@@ -7,7 +7,7 @@ function renderReport(d){
   const { cfg, dcf, graham, lynch, ev, fv, scen, peg, cl, sc, revDCF, fscore,
           decomp, altman, beneish, score5y, rating, dq, confObj, conf, why,
           news, ladder, fcfDCF, trend, resInc, dcfCapm,
-          passCount, usedWACC, horizons } = A;
+          passCount, clTotal, usedWACC, horizons } = A;
   const wacc = A.waccObj, ratingCaps = A.caps;
   const _pinned = !!(mbLoadStore().entries[mbKey(d)]||{}).pinned;
   const gc = score5y>=4?'#00e676':score5y>=3?'#40c4ff':score5y>=2?'#ffab40':'#ff5252';
@@ -760,12 +760,14 @@ Fair Price = (Fair_EV − Debt + Cash) ÷ Shares
         </div>
       </div>
       <div class="card">
-        <div class="ch"><div class="ct"><i class="fas fa-list-check" style="color:var(--g)"></i> Multibagger Checklist — Threshold-Based</div><span class="ap ${passCount>=8?'aU':passCount>=6?'aF':'aO'}">${passCount}/10</span></div>
+        <div class="ch"><div class="ct"><i class="fas fa-list-check" style="color:var(--g)"></i> Multibagger Checklist — Threshold-Based</div><span class="ap ${passCount>=clTotal*0.8?'aU':passCount>=clTotal*0.6?'aF':'aO'}">${passCount}/${clTotal}</span></div>
         <div class="cb">
           <div class="clgrid">
-            ${cl.map(x=>`<div class="ci ${x.pass?'pass':'fail'}"><i class="fas ${x.pass?'fa-circle-check':'fa-circle-xmark'} cico"></i><div><div>${x.lbl}</div><span class="ci-sub">${x.sub}</span></div></div>`).join('')}
+            ${cl.map(x=>x.na
+              ? `<div class="ci" style="opacity:0.55"><i class="fas fa-circle-minus cico" style="color:var(--m)"></i><div><div style="color:var(--m)">${x.lbl}</div><span class="ci-sub">${x.sub}</span></div></div>`
+              : `<div class="ci ${x.pass?'pass':'fail'}"><i class="fas ${x.pass?'fa-circle-check':'fa-circle-xmark'} cico"></i><div><div>${x.lbl}</div><span class="ci-sub">${x.sub}</span></div></div>`).join('')}
           </div>
-          <div class="cscore">Passed <span>${passCount}</span>/10 — ${passCount>=8?'Strong Multibagger Profile':passCount>=6?'Good Candidate':passCount>=4?'Moderate Potential':'Weak Profile'}</div>
+          <div class="cscore">Passed <span>${passCount}</span>/${clTotal} — ${passCount>=clTotal*0.8?'Strong Multibagger Profile':passCount>=clTotal*0.6?'Good Candidate':passCount>=clTotal*0.4?'Moderate Potential':'Weak Profile'}</div>
         </div>
       </div>
     </div>
