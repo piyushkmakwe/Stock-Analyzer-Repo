@@ -88,7 +88,7 @@ const SECTOR_CONFIGS = {
       {lbl:'ROE & ROCE > 20%',              fn:d=>(d.roe_pct||0)>20&&(d.roce_pct||0)>20,      sub:d=>`ROE: ${pct(d.roe_pct)} ROCE: ${pct(d.roce_pct)}`},
       {lbl:'Working Capital < 60 Days',     fn:d=>(d.sd?.working_capital_days||99)<60,          sub:d=>`WC: ${d.sd?.working_capital_days||'N/A'}d`},
       {lbl:'Margin Expansion Scope',        fn:d=>!!(d.margin_expansion_potential),             sub:_=>'Qualitative'},
-      {lbl:'Strong Order Book / Backlog',   fn:d=>d.business_overview?.order_book!=null,        sub:_=>'Order book disclosed'},
+      {lbl:'Order Backlog > 6 Months',      fn:d=>(d.sd?.order_backlog_months||0)>6,            sub:d=>`Backlog: ${d.sd?.order_backlog_months||'N/A'} months`},
       {lbl:'PLI / Govt Scheme Beneficiary', fn:d=>(d.government_support_score||0)>65,          sub:d=>`Score: ${d.government_support_score||'N/A'}/100`},
       {lbl:'Promoter Hold > 50%, Pledge < 5%',fn:d=>(d.promoter_holding_pct||0)>50&&(d.promoter_pledge_pct||99)<5, sub:d=>`Hold: ${pct(d.promoter_holding_pct)}`},
     ],
@@ -248,7 +248,7 @@ const SECTOR_CONFIGS = {
       {lbl:'Exports > 40% Revenue',         fn:d=>(d.sd?.export_revenue_pct||0)>40,             sub:d=>`Exports: ${pct(d.sd?.export_revenue_pct)}`},
       {lbl:'Low Debt (D/E < 0.5)',          fn:d=>(d.debt_to_equity||99)<0.5,                   sub:d=>`D/E: ${d.debt_to_equity?.toFixed(2)||'N/A'}`},
       {lbl:'ROE > 20%',                     fn:d=>(d.roe_pct||0)>20,                            sub:d=>`ROE: ${pct(d.roe_pct)}`},
-      {lbl:'Capacity Expansion Planned',    fn:d=>d.business_overview?.capacity_expansion!=null, sub:_=>'Expansion disclosed'},
+      {lbl:'Capacity Utilization > 75%',    fn:d=>(d.sd?.capacity_util_pct||0)>75,               sub:d=>`Util: ${pct(d.sd?.capacity_util_pct)}`},
       {lbl:'PLI / Govt Scheme Beneficiary', fn:d=>(d.government_support_score||0)>65,           sub:d=>`Score: ${d.government_support_score||'N/A'}/100`},
       {lbl:'Promoter Hold > 50%',           fn:d=>(d.promoter_holding_pct||0)>50,               sub:d=>`Hold: ${pct(d.promoter_holding_pct)}`},
     ],
@@ -293,14 +293,14 @@ const SECTOR_CONFIGS = {
       {id:'fiveg_rollout_pct',    lbl:'5G Coverage (%)',          unit:'%', hi:true,  lo:0,   hi_v:100,desc:'Future revenue driver'},
     ],
     checklist:[
-      {lbl:'ARPU Growing YoY',              fn:d=>(d.sd?.arpu||0)>150,                         sub:d=>`ARPU: ₹${d.sd?.arpu||'N/A'}`},
+      {lbl:'ARPU > ₹150 (pricing power)',   fn:d=>(d.sd?.arpu||0)>150,                         sub:d=>`ARPU: ₹${d.sd?.arpu||'N/A'}`},
       {lbl:'Subscriber Market Share Stable',fn:d=>(d.competitive_position_score||0)>55,        sub:d=>`Score: ${d.competitive_position_score||'N/A'}/100`},
       {lbl:'EBITDA Margin > 40%',           fn:d=>(d.sd?.ebitda_margin_pct||0)>40,             sub:d=>`Margin: ${pct(d.sd?.ebitda_margin_pct)}`},
       {lbl:'Net Debt / EBITDA < 3.5x',      fn:d=>(d.sd?.net_debt_ebitda||99)<3.5,             sub:d=>`ND/EBITDA: ${d.sd?.net_debt_ebitda?.toFixed(1)||'N/A'}x`},
       {lbl:'Revenue CAGR > 8%',             fn:d=>(d.revenue_cagr_3yr_pct||0)>8,               sub:d=>`CAGR: ${pct(d.revenue_cagr_3yr_pct)}`},
       {lbl:'5G Infrastructure Rollout',     fn:d=>(d.sd?.fiveg_rollout_pct||0)>20,             sub:d=>`5G: ${pct(d.sd?.fiveg_rollout_pct)}`},
       {lbl:'Govt Policy (Spectrum/BSNL)',   fn:d=>(d.government_support_score||0)>60,           sub:d=>`Score: ${d.government_support_score||'N/A'}/100`},
-      {lbl:'FCF Positive (Post Capex)',     fn:d=>(d.profit_cagr_3yr_pct||0)>0,               sub:d=>`PAT CAGR: ${pct(d.profit_cagr_3yr_pct)}`},
+      {lbl:'Profit Trend Positive (PAT CAGR > 0)', fn:d=>(d.profit_cagr_3yr_pct||0)>0,        sub:d=>`PAT CAGR: ${pct(d.profit_cagr_3yr_pct)}`},
       {lbl:'Promoter Hold > 50%',           fn:d=>(d.promoter_holding_pct||0)>50,              sub:d=>`Hold: ${pct(d.promoter_holding_pct)}`},
       {lbl:'Sector Duopoly Position',       fn:d=>(d.competitive_position_score||0)>65,        sub:d=>`Score: ${d.competitive_position_score||'N/A'}/100`},
     ],
@@ -582,11 +582,15 @@ function calcPEG(pe, growthPct){
 function buildChecklist(d, peg){
   const cfg = getSectorConfig(d);
   d.sd = d.sector_specific_data?.[d.business_type] || {};
-  return cfg.checklist.map(item => ({
-    lbl: item.lbl,
-    pass: !!(item.fn(d)),
-    sub: item.sub(d)
-  }));
+  // Professionally-managed companies (HDFC Bank, L&T, ITC types) have low/no
+  // promoter holding BY STRUCTURE — failing them on a promoter check is a
+  // category error, so those items go N/A and leave the denominator.
+  const instOwned = d.promoter_holding_pct!=null && d.promoter_holding_pct < 5;
+  return cfg.checklist.map(item => {
+    if(instOwned && /promoter hold/i.test(item.lbl))
+      return { lbl: item.lbl, pass: false, na: true, sub: 'N/A — professionally managed (no promoter)' };
+    return { lbl: item.lbl, pass: !!(item.fn(d)), sub: item.sub(d) };
+  });
 }
 
 // Six-pillar composite. Future Growth carries the second-largest weight —
@@ -605,14 +609,15 @@ function calcScores(d, peg){
   const fArr = cfg.fScore(d);
   const fScore = fArr.reduce((a,b)=>a+b,0) / fArr.length;
 
-  // 2. Future growth — demand today, strategy credibility, sector runway,
-  //    scalability, and the model's own sustainable-growth estimate (25%)
+  // 2. Future growth — demand today, strategy credibility, sector runway (25%).
+  //    Deliberately EXCLUDED: the legacy scalability opinion score (overlaps
+  //    the evidence-based strategy/demand scores — one opinion, counted once)
+  //    and the growth-magnitude term (g already fully drives the targets and
+  //    return score; counting it here too was a double reward for momentum).
   const gScore = avg([
     qa.demand_outlook?.score,
     qa.growth_strategy?.score,
-    d.sector_tailwind_score,
-    d.business_scalability_score,
-    d._g!=null ? Math.max(0,Math.min(100,(d._g*100-4)/(28-4)*100)) : null
+    d.sector_tailwind_score
   ]) ?? 50;
 
   // 3. Valuation attractiveness (20%)
@@ -627,10 +632,11 @@ function calcScores(d, peg){
   const vScore = vArr.length ? vArr.reduce((a,b)=>a+b,0)/vArr.length : 50;
 
   // 4. Business quality & market presence — product quality, share, moat (10%)
+  // Legacy competitive_position_score EXCLUDED — it duplicates the
+  //    evidence-based market_presence score (still shown in checklists).
   const qScore = avg([
     qa.product_quality?.score,
-    qa.market_presence?.score,
-    d.competitive_position_score
+    qa.market_presence?.score
   ]) ?? 50;
 
   // 5. Management & governance — skin in the game, pledge, record, trust (10%)
@@ -658,6 +664,10 @@ function calcScores(d, peg){
 // silently computing on it.
 function validateDataConsistency(d){
   const checks = [];
+  // Fields the verified feed DERIVED (eps = price/PE, pb = price/BV, shares =
+  // mcap/price) make their identity checks tautological — skip those so the
+  // "checks passed" count stays honest instead of self-congratulating.
+  const derived = new Set((d._provenance && d._provenance.fields) || []);
   const add = (name, ok, severity, detail) => checks.push({ name, ok: !!ok, severity, detail });
   const within = (a, b, tol) => a!=null && b!=null && b!==0 && Math.abs(a/b - 1) <= tol;
   const h = d.financial_history || {};
@@ -669,13 +679,13 @@ function validateDataConsistency(d){
   };
 
   // 1-3: price / multiple identities
-  if(d.current_price && d.eps_ttm>0 && d.pe_ratio)
+  if(d.current_price && d.eps_ttm>0 && d.pe_ratio && !derived.has('eps_ttm'))
     add('P/E ↔ Price÷EPS', within(d.current_price/d.eps_ttm, d.pe_ratio, 0.12), 'fail',
         `price÷EPS = ${(d.current_price/d.eps_ttm).toFixed(1)} vs claimed P/E ${d.pe_ratio.toFixed(1)}`);
-  if(d.market_cap_cr && d.shares_outstanding_cr && d.current_price)
+  if(d.market_cap_cr && d.shares_outstanding_cr && d.current_price && !derived.has('shares_outstanding_cr'))
     add('MCap ↔ Price×Shares', within(d.market_cap_cr/d.shares_outstanding_cr, d.current_price, 0.10), 'fail',
         `mcap÷shares = ₹${(d.market_cap_cr/d.shares_outstanding_cr).toFixed(0)} vs price ₹${d.current_price.toFixed(0)}`);
-  if(d.current_price && d.book_value_per_share>0 && d.pb_ratio)
+  if(d.current_price && d.book_value_per_share>0 && d.pb_ratio && !derived.has('pb_ratio'))
     add('P/B ↔ Price÷BVPS', within(d.current_price/d.book_value_per_share, d.pb_ratio, 0.12), 'warn',
         `price÷BVPS = ${(d.current_price/d.book_value_per_share).toFixed(1)} vs claimed P/B ${d.pb_ratio.toFixed(1)}`);
 
@@ -713,7 +723,7 @@ function validateDataConsistency(d){
 
   // 11: EPS × shares ≈ PAT
   if(d.eps_ttm>0 && d.shares_outstanding_cr>0 && pl!=null)
-    add('EPS×Shares ↔ PAT', within(d.eps_ttm*d.shares_outstanding_cr, pl, 0.25), 'warn',
+    add('EPS×Shares ↔ PAT (TTM vs FY — wide tolerance)', within(d.eps_ttm*d.shares_outstanding_cr, pl, 0.40), 'warn',
         `implies PAT ₹${(d.eps_ttm*d.shares_outstanding_cr).toFixed(0)} Cr vs history ₹${pl} Cr`);
 
   // 12-14: hard sanity bounds
@@ -761,8 +771,16 @@ function deriveConfidence(d, dq, fvSpread){
     score -= fvSpread.ratio > 3 ? 25 : 15;
     reasons.push(`Valuation models disagree ${fvSpread.ratio.toFixed(1)}× between lowest and highest — treat the blended fair value loosely.`);
   }
-  if(!d.piotroski_data){ score -= 4; reasons.push('Prior-year data absent — Piotroski check could not run.'); }
-  if(!d.beneish_data){ score -= 4; reasons.push('Manipulation screen (Beneish) could not run.'); }
+  const bank = d && d.business_type==='BANKING_NBFC';
+  const histVerified = d && d._provenance && (d._provenance.fields||[]).includes('financial_history');
+  if(!bank && !d.piotroski_data){
+    if(histVerified) reasons.push('Piotroski screen could not run (granular prior-year data missing) — no penalty: statements are independently verified.');
+    else { score -= 4; reasons.push('Prior-year data absent — Piotroski check could not run.'); }
+  }
+  if(!bank && !d.beneish_data){
+    if(histVerified) reasons.push('Manipulation screen (Beneish) could not run — no penalty: statements are independently verified.');
+    else { score -= 4; reasons.push('Manipulation screen (Beneish) could not run.'); }
+  }
   score = Math.max(0, Math.min(100, score));
   const level = score > 72 ? 'HIGH' : score >= 50 ? 'MEDIUM' : 'LOW';
   return { level, score, reasons };
@@ -790,6 +808,9 @@ function calcPromoterTrend(d){
 // cumulative — profits that never become cash across five years point
 // to channel stuffing or aggressive accounting. Verified statement data.
 function calcCashConversion(d){
+  // For a lender, cash flowing OUT as new loans is the business model —
+  // CFO far below PAT is healthy growth, not an earnings-quality flag.
+  if(d.business_type==='BANKING_NBFC') return { na:true };
   const cfo = d._cfoHistory;
   const pat = (d.financial_history?.pat_cr||[]).filter(x=>x!=null);
   if(!Array.isArray(cfo) || cfo.length < 3 || pat.length < 3) return null;
@@ -843,8 +864,12 @@ function deriveRating(score5y, composite, d, guards){
       capTo('HOLD', `Beneish M-score ${beneish.M.toFixed(2)} flags possible earnings manipulation — the reported numbers this analysis rests on may not be reliable.`);
     if(altman && !altman.na && altman.zone==='Distress')
       capTo('AVOID', `Altman Z-score ${altman.Z.toFixed(2)} is in the distress zone — elevated bankruptcy risk overrides the growth thesis.`);
-    else if(altman && !altman.na && altman.zone==='Grey')
+    else if(altman && !altman.na && altman.zone==='Grey'
+            && !['ENERGY_POWER','TELECOM','INFRASTRUCTURE','REAL_ESTATE'].includes(d && d.business_type))
       capTo('BUY', `Altman Z-score ${altman.Z.toFixed(2)} is in the grey zone — balance-sheet stress cannot be ruled out.`);
+      // Grey zone does NOT cap utilities/telecom/infra/realty: Z was derived on
+      // manufacturers, and contracted-cash-flow sectors sit structurally in grey.
+      // The DISTRESS cap above still applies to every sector.
     if(revDCF && !revDCF.na && revDCF.bounded==='above')
       capTo('HOLD', 'Reverse DCF: the price implies >60%/yr earnings growth — extreme expectations with very high disappointment risk.');
     else if(revDCF && !revDCF.na && revDCF.implied!=null && revDCF.implied > revDCF.sustainable*1.25)
@@ -858,7 +883,7 @@ function deriveRating(score5y, composite, d, guards){
     const { promoterTrend, cashConv } = guards;
     if(promoterTrend && promoterTrend.flag)
       capTo('BUY', `Promoters sold ${Math.abs(promoterTrend.delta).toFixed(1)} percentage points of their stake over the last year (${promoterTrend.from}% → ${promoterTrend.to}%) — insiders reducing exposure is a serious warning.`);
-    if(cashConv && cashConv.flag)
+    if(cashConv && !cashConv.na && cashConv.flag)
       capTo('BUY', `Only ₹${cashConv.ratio} of operating cash was generated per ₹1 of reported profit over ${cashConv.years} years — profits are not turning into cash.`);
   }
   return { r, caps, base };
@@ -939,8 +964,8 @@ function buildRatingRationale(d, x){
   const fmt1=(v,dp=2)=>v==null?null:(+v).toFixed(dp);
   const guardrails = [
     { name:'Earnings-manipulation screen (Beneish M)',
-      status: beneish&&beneish.M!=null ? (beneish.flag?'fired':'passed') : 'no data',
-      detail: beneish&&beneish.M!=null ? `M = ${fmt1(beneish.M)} (flag above −1.78)` : 'needs 2 years of granular financials' },
+      status: beneish&&beneish.na ? 'n/a for banks' : beneish&&beneish.M!=null ? (beneish.flag?'fired':'passed') : 'no data',
+      detail: beneish&&beneish.na ? 'receivables/COGS ratios don’t apply to lenders' : beneish&&beneish.M!=null ? `M = ${fmt1(beneish.M)} (flag above −1.78)` : 'needs 2 years of granular financials' },
     { name:'Bankruptcy-risk screen (Altman Z)',
       status: altman&&altman.na ? 'n/a for banks' : altman&&altman.Z!=null ? (altman.zone==='Distress'?'fired':altman.zone==='Grey'?'caution':'passed') : 'no data',
       detail: altman&&altman.Z!=null ? `Z = ${fmt1(altman.Z)} → ${altman.zone} zone` : '' },
@@ -954,8 +979,8 @@ function buildRatingRationale(d, x){
       status: promoterTrend ? (promoterTrend.flag?'fired':promoterTrend.soft?'caution':'passed') : 'no data',
       detail: promoterTrend ? `${promoterTrend.from}% → ${promoterTrend.to}% (${promoterTrend.delta>0?'+':''}${promoterTrend.delta}pp over ~1yr)` : 'shareholding history unavailable' },
     { name:'Cash-conversion screen (CFO vs PAT, cumulative)',
-      status: cashConv ? (cashConv.flag?'fired':cashConv.soft?'caution':'passed') : 'no data',
-      detail: cashConv ? `₹${cashConv.cfoSum} Cr cash from ₹${cashConv.patSum} Cr profit over ${cashConv.years} yrs (ratio ${cashConv.ratio})` : 'cash-flow history unavailable' }
+      status: cashConv&&cashConv.na ? 'n/a for banks' : cashConv ? (cashConv.flag?'fired':cashConv.soft?'caution':'passed') : 'no data',
+      detail: cashConv&&cashConv.na ? 'lending cash flows aren’t comparable to PAT' : cashConv ? `₹${cashConv.cfoSum} Cr cash from ₹${cashConv.patSum} Cr profit over ${cashConv.years} yrs (ratio ${cashConv.ratio})` : 'cash-flow history unavailable' }
   ];
 
   // 6. What would change the call
@@ -1199,6 +1224,10 @@ function calcAltmanZ(d){
 
 // ── Beneish M-score (earnings-manipulation flag) ─────────
 function calcBeneishM(d){
+  // Beneish was built on receivables / COGS / PP&E ratios — concepts that
+  // don't exist for a lender. Running it on a bank produces garbage that
+  // could falsely fire the manipulation guardrail.
+  if(d.business_type==='BANKING_NBFC') return { na:true };
   const b=d.beneish_data; if(!b) return null;
   const need=['receivables_t','receivables_p','sales_t','sales_p','cogs_t','cogs_p','current_assets_t','current_assets_p','ppe_t','ppe_p','total_assets_t','total_assets_p','depreciation_t','depreciation_p','sga_t','sga_p','current_liab_t','current_liab_p','ltd_t','ltd_p','net_income_t','cfo_t'];
   for(const k of need){ if(b[k]==null) return { incomplete:true }; }
@@ -1348,11 +1377,12 @@ function computeAnalysis(d){
   const trend   = calcTrendStats(d);
   const resInc  = d.business_type==='BANKING_NBFC' ? calcResidualIncome(d, waccObj?waccObj.ke:(RF+ERP)) : null;
   const dcfCapm = dcfValueAt(d, d._g, d._wacc);
-  const passCount = cl.filter(x=>x.pass).length;
+  const passCount = cl.filter(x=>x.pass && !x.na).length;
+  const clTotal   = cl.filter(x=>!x.na).length;
 
   return { cfg, waccObj, dcf, graham, lynch, ev, fv, scen, peg, cl, sc,
            revDCF, altman, beneish, score5y, rating, caps, base, dq, confObj,
            conf: confObj.level, why, news, ladder, fscore, decomp, trend,
            fcfDCF, resInc, dcfCapm, passCount, usedWACC: d._wacc,
-           promoterTrend, cashConv, horizons };
+           promoterTrend, cashConv, horizons, clTotal };
 }
