@@ -7,7 +7,7 @@ function renderReport(d){
   const { cfg, dcf, graham, lynch, ev, fv, scen, peg, cl, sc, revDCF, fscore,
           decomp, altman, beneish, score5y, rating, dq, confObj, conf, why,
           news, ladder, fcfDCF, trend, resInc, dcfCapm,
-          passCount, usedWACC } = A;
+          passCount, usedWACC, horizons } = A;
   const wacc = A.waccObj, ratingCaps = A.caps;
   const _pinned = !!(mbLoadStore().entries[mbKey(d)]||{}).pinned;
   const gc = score5y>=4?'#00e676':score5y>=3?'#40c4ff':score5y>=2?'#ffab40':'#ff5252';
@@ -249,6 +249,25 @@ function renderReport(d){
           <div style="font-size:0.58rem;font-weight:800;color:var(--a);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:5px"><i class="fas fa-shield-halved"></i> Rating capped by guardrails</div>
           ${ratingCaps.map(c=>`<div style="font-size:0.66rem;color:var(--t);line-height:1.55;margin-bottom:3px"><strong style="color:var(--a)">${c.from} → ${c.to}:</strong> ${c.why}</div>`).join('')}
         </div>`:''}
+        ${horizons ? `
+        <div style="margin-bottom:12px">
+          <div style="font-size:0.58rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px">Horizon calls — same engine, three holding periods</div>
+          <div style="display:flex;gap:7px;flex-wrap:wrap">
+            ${horizons.map(h=>{
+              const rc = h.rating==='STRONG BUY'?'var(--g)':h.rating==='BUY'?'var(--bl)':h.rating==='HOLD'?'var(--a)':'var(--r)';
+              const big = h.k!=='5Y';
+              return `<div style="flex:${big?'1.2':'1'};min-width:${big?'118px':'96px'};background:var(--s2);border:1px solid ${rc};border-radius:10px;padding:${big?'10px 12px':'8px 10px'};${big?'':'opacity:0.85'}">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                  <span style="font-size:${big?'0.66rem':'0.58rem'};font-weight:800;color:var(--t)">${h.k}</span>
+                  ${h.term==='short'?'<span style="font-size:0.46rem;font-weight:800;color:var(--bl);background:var(--blb);padding:1px 5px;border-radius:99px">FOCUS</span>':''}
+                </div>
+                <div style="font-size:${big?'0.92rem':'0.78rem'};font-weight:800;color:${rc};margin:3px 0 1px">${h.rating}</div>
+                <div style="font-size:0.56rem;color:var(--m);font-family:'JetBrains Mono',monospace">${h.annRet>0?'+':''}${h.annRet}%/yr expected</div>
+              </div>`;
+            }).join('')}
+          </div>
+          <div style="font-size:0.54rem;color:var(--m2);margin-top:5px">1Y &amp; 2Y are the actionable calls; the headline badge above is the 5-yr multibagger verdict. All horizons share the guardrail caps, and short horizons carry wider error bars.</div>
+        </div>` : ''}
         <div class="tg">
           <div class="tb"><div class="tbl">6M Target (Base)</div><div class="tbv">${ladder?fmtINR(ladder[0].base.px,0):'—'}</div></div>
           <div class="tb"><div class="tbl">1Y Target (Base)</div><div class="tbv">${ladder?fmtINR(ladder[1].base.px,0):'—'}</div></div>
@@ -322,7 +341,7 @@ Expected value = 25% bear ${fmtINR(why.target.bear5,0)} + 50% base ${fmtINR(why.
         <details style="margin-top:12px">
           <summary><i class="fas fa-chevron-right"></i> Every algorithm used in this analysis</summary>
           <div style="margin-top:9px;font-size:0.64rem;color:var(--m);line-height:1.8">
-            <strong style="color:var(--t)">Growth:</strong> g = blend( 3-yr CAGR × sector fade factor, retention × ROE ), capped per sector · <strong style="color:var(--t)">DCF:</strong> 3-phase 10-yr EPS discounting at ${(d._wacc*100).toFixed(1)}% (CAPM when beta known, else sector WACC), years 6–10 decay linearly to terminal ${(TERMINAL_G*100).toFixed(1)}%, exit P/E = sector avg × 0.7 clamped 12–28, minus ${(MOS*100).toFixed(0)}% margin of safety · <strong style="color:var(--t)">Graham:</strong> √(22.5 × EPS × BVPS) · <strong style="color:var(--t)">Lynch:</strong> EPS × growth% (P/E capped 40) · <strong style="color:var(--t)">EV/EBITDA:</strong> (EBITDA × sector multiple − debt + cash) ÷ shares · <strong style="color:var(--t)">Blend:</strong> ${d.business_type==='BANKING_NBFC'?'P/B 60% + Graham 25% + Lynch 15% (banks — book-value businesses are Graham territory)':'EPS-DCF 35% + FCFF-DCF 15% (EPS-DCF 50% when cash-flow data is missing) + Lynch 25% + EV/EBITDA 25%; Graham shown as deep-value floor only'} · <strong style="color:var(--t)">Discount rate:</strong> CAPM (beta clamped 0.5–2.0) + small-cap size premium (+1.5% below ₹5,000 Cr, +0.75% below ₹20,000 Cr) · <strong style="color:var(--t)">Scenarios:</strong> bear/base/bull = growth ×0.45 / ×1 / ×1.35 with exit P/Es 0.8×current / drift 40% to sector / sector avg · <strong style="color:var(--t)">Composite:</strong> Financial 30% + Future Growth 25% + Valuation 20% + Quality 10% + Management 10% + Policy 5% · <strong style="color:var(--t)">Forensics:</strong> Piotroski 9-test F-score, Altman Z″ (emerging-market coefficients), Beneish 8-ratio M-score · <strong style="color:var(--t)">Reverse DCF:</strong> bisection for the growth rate that makes intrinsic value equal today's price · <strong style="color:var(--t)">Confidence:</strong> verified-field coverage + 15 cross-field consistency checks + completeness + model dispersion.
+            <strong style="color:var(--t)">Growth:</strong> g = blend( 3-yr CAGR × sector fade factor, retention × ROE ), capped per sector · <strong style="color:var(--t)">DCF:</strong> 3-phase 10-yr EPS discounting at ${(d._wacc*100).toFixed(1)}% (CAPM when beta known, else sector WACC), years 6–10 decay linearly to terminal ${(TERMINAL_G*100).toFixed(1)}%, exit P/E = sector avg × 0.7 clamped 12–28, minus ${(MOS*100).toFixed(0)}% margin of safety · <strong style="color:var(--t)">Graham:</strong> √(22.5 × EPS × BVPS) · <strong style="color:var(--t)">Lynch:</strong> EPS × growth% (P/E capped 40) · <strong style="color:var(--t)">EV/EBITDA:</strong> (EBITDA × sector multiple − debt + cash) ÷ shares · <strong style="color:var(--t)">Blend:</strong> ${d.business_type==='BANKING_NBFC'?'P/B 60% + Graham 25% + Lynch 15% (banks — book-value businesses are Graham territory)':'EPS-DCF 35% + FCFF-DCF 15% (EPS-DCF 50% when cash-flow data is missing) + Lynch 25% + EV/EBITDA 25%; Graham shown as deep-value floor only'} · <strong style="color:var(--t)">Discount rate:</strong> CAPM (beta clamped 0.5–2.0) + small-cap size premium (+1.5% below ₹5,000 Cr, +0.75% below ₹20,000 Cr) · <strong style="color:var(--t)">Scenarios:</strong> bear/base/bull = growth ×0.45 / ×1 / ×1.35 with exit P/Es 0.8×current / drift 40% to sector / sector avg · <strong style="color:var(--t)">Rating bands (all horizons):</strong> STRONG BUY ≥22%/yr expected + composite &gt;70 · BUY ≥15%/yr + &gt;58 · HOLD ≥8%/yr + &gt;44 · 1Y/2Y/5Y rated from each horizon's probability-weighted EV, all capped by the guardrails · <strong style="color:var(--t)">Composite:</strong> Financial 30% + Future Growth 25% + Valuation 20% + Quality 10% + Management 10% + Policy 5% · <strong style="color:var(--t)">Forensics:</strong> Piotroski 9-test F-score, Altman Z″ (emerging-market coefficients), Beneish 8-ratio M-score · <strong style="color:var(--t)">Reverse DCF:</strong> bisection for the growth rate that makes intrinsic value equal today's price · <strong style="color:var(--t)">Confidence:</strong> verified-field coverage + 15 cross-field consistency checks + completeness + model dispersion.
           </div>
         </details>
       </div>
@@ -591,11 +610,12 @@ Expected value = 25% bear ${fmtINR(why.target.bear5,0)} + 50% base ${fmtINR(why.
       <div class="cb">
         ${ladder ? `
         <table class="dcf-t" style="margin-bottom:10px">
-          <tr><th>Horizon</th><th></th><th style="color:var(--r)">Bear</th><th style="color:var(--a)">Base — exit reference</th><th style="color:var(--g)">Bull</th><th>Base return /yr (incl. div)</th></tr>
+          <tr><th>Horizon</th><th></th><th>Call</th><th style="color:var(--r)">Bear</th><th style="color:var(--a)">Base — exit reference</th><th style="color:var(--g)">Bull</th><th>Base return /yr (incl. div)</th></tr>
           ${ladder.map(r=>`
           <tr${r.k==='1Y'?' style="border-bottom:2px solid var(--b2)"':''}>
             <td style="font-weight:700;color:var(--t)">${r.label}</td>
             <td><span style="font-size:0.5rem;font-weight:800;padding:1px 6px;border-radius:99px;${r.term==='short'?'background:var(--blb);color:var(--bl)':'background:var(--pb);color:var(--p)'}">${r.term==='short'?'SHORT-TERM':'LONG-TERM'}</span></td>
+            <td>${(()=>{const hz=(horizons||[]).find(h=>h.k===r.k); if(!hz) return '<span style="color:var(--m2);font-size:0.6rem">—</span>'; const rc=hz.rating==='STRONG BUY'?'var(--g)':hz.rating==='BUY'?'var(--bl)':hz.rating==='HOLD'?'var(--a)':'var(--r)'; return `<span style="font-size:0.6rem;font-weight:800;color:${rc}">${hz.rating}</span>`;})()}</td>
             <td style="color:var(--r)">${fmtINR(r.bear.px,0)} <span style="font-size:0.55rem">(${fmtP(r.bear.ret)})</span></td>
             <td style="color:var(--a);font-weight:700">${fmtINR(r.base.px,0)} <span style="font-size:0.55rem">(${fmtP(r.base.ret)})</span></td>
             <td style="color:var(--g)">${fmtINR(r.bull.px,0)} <span style="font-size:0.55rem">(${fmtP(r.bull.ret)})</span></td>

@@ -302,10 +302,13 @@ function ledgerRecordCall(d){
   const key = mbKey(d);
   if(!key || !d.current_price || !d._lastRating) return;
   const lad = calcTargetLadder(d);
+  const hz = d._horizons || null;
   const l = ledgerLoad();
   l.calls.push({
     t: Date.now(), key, name: d.stock_name||key, ticker: d.ticker||'',
     price: d.current_price, rating: d._lastRating,
+    r1y: hz ? (hz.find(h=>h.k==='1Y')||{}).rating : null,
+    r2y: hz ? (hz.find(h=>h.k==='2Y')||{}).rating : null,
     t6m: lad ? +lad[0].base.px.toFixed(2) : null,
     t1y: lad ? +lad[1].base.px.toFixed(2) : null,
     t5y: lad ? +lad[3].base.px.toFixed(2) : null

@@ -118,7 +118,7 @@ function buildPrintReport(d){
   const AN = computeAnalysis(d);
   const { cfg, waccObj, dcf, graham, lynch, ev, fv, scen, peg, cl, sc,
           revDCF, altman, beneish, score5y, rating, caps, dq, confObj, conf,
-          why, news, ladder, fscore, decomp, trend, passCount } = AN;
+          why, news, ladder, fscore, decomp, trend, passCount, horizons } = AN;
   const usedWACC = AN.usedWACC;
   const cmp=d.current_price;
   const genDate=new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'long',year:'numeric'});
@@ -243,6 +243,17 @@ function buildPrintReport(d){
         <span style="background:${ratingTone};color:#fff;font-size:13px;font-weight:800;padding:5px 15px;border-radius:7px">${rating}</span>
         <span style="font-size:9px;color:${PDF_INK2}">Confidence: <strong>${conf}</strong> · Quality score <strong>${sc.composite.toFixed(0)}/100</strong> · Checklist <strong>${passCount}/10</strong></span>
       </div>
+      ${horizons?`
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        ${horizons.map(h=>{
+          const c = h.rating==='STRONG BUY'||h.rating==='BUY' ? PDF_GOODTXT : h.rating==='HOLD' ? '#a36f00' : PDF_CRIT;
+          return `<div style="flex:1;border:1.5px solid ${c};border-radius:8px;padding:6px 10px;text-align:center">
+            <div style="font-size:8px;font-weight:700;color:${PDF_MUT}">${h.k} call${h.term==='short'?' · FOCUS':''}</div>
+            <div style="font-size:11px;font-weight:800;color:${c}">${h.rating}</div>
+            <div style="font-size:7.5px;color:${PDF_INK2}">${h.annRet>0?'+':''}${h.annRet}%/yr expected</div>
+          </div>`;
+        }).join('')}
+      </div>`:''}
       <p style="font-size:9.5px">${verdictWords}</p>
       ${capBlock}
       ${why?`
@@ -252,7 +263,7 @@ function buildPrintReport(d){
           <strong>1.</strong> Growth assumption: ${why.growth.histCagr!=null?`historical ${pdfPct(why.growth.histCagr)}/yr faded by the sector factor (×${why.growth.reg})`:'sector default'}${why.growth.gFund!=null?`, cross-checked against self-funded growth (retention × ROE = ${pdfPct(why.growth.gFund*100)})`:''} → <strong>${pdfPct(why.growth.g*100)}/yr</strong>.<br>
           ${why.target?`<strong>2.</strong> 5-yr score: base target = EPS ${pdfINR(why.target.eps,2)} × (1+${(why.target.g*100).toFixed(1)}%)⁵ × exit P/E ${why.target.exitPE.toFixed(1)} = ${pdfINR(why.target.base5)}; expected value = 25% bear ${pdfINR(why.target.bear5)} + 50% base + 25% bull ${pdfINR(why.target.bull5)}${why.target.div5?` + dividends ${pdfINR(why.target.div5)}`:''}; ÷ price ${pdfINR(why.target.cmp)} = <strong>score ${why.target.score.toFixed(2)}</strong>.<br>`:''}
           <strong>3.</strong> Composite quality: ${why.pillars.map(p=>`${p.name} ${p.score.toFixed(0)}×${(p.w*100).toFixed(0)}%`).join(' + ')} = <strong>${why.composite.toFixed(0)}/100</strong>.<br>
-          <strong>4.</strong> Band test: ${why.base} requires ${why.base==='AVOID'?'— no band was met (HOLD needs score ≥ 1.8 and composite > 44)':`score ≥ ${(RATING_RULES.find(r=>r[0]===why.base)||[])[1]} <strong>(${score5y.toFixed(2)} ${score5y>=((RATING_RULES.find(r=>r[0]===why.base)||[])[1]||0)?'✓':'✗'})</strong> and composite > ${(RATING_RULES.find(r=>r[0]===why.base)||[])[2]} <strong>(${sc.composite.toFixed(0)} ✓)</strong>`}.<br>
+          <strong>4.</strong> Band test: ${why.base} requires ${why.base==='AVOID'?'— no band was met (HOLD needs ≥8%/yr expected and composite > 44)':`expected return ≥ ${(((RATING_RULES.find(r=>r[0]===why.base)||[])[1]||0)*100).toFixed(0)}%/yr <strong>(${(annualize(score5y,5)*100).toFixed(1)}%/yr ${annualize(score5y,5)>=((RATING_RULES.find(r=>r[0]===why.base)||[])[1]||0)?'✓':'✗'})</strong> and composite > ${(RATING_RULES.find(r=>r[0]===why.base)||[])[2]} <strong>(${sc.composite.toFixed(0)} ✓)</strong>`}. Horizon calls: ${(horizons||[]).map(h=>`${h.k} <strong>${h.rating}</strong>`).join(' · ')||'—'}.<br>
           <strong>5.</strong> Guardrails: ${why.guardrails.map(g=>`${g.name.replace(/\s*\(.*\)/,'')} <strong style="color:${g.status==='fired'?PDF_CRIT:g.status==='caution'?'#a36f00':g.status==='passed'?PDF_GOODTXT:PDF_MUT}">${g.status}</strong>`).join(' · ')}${why.base!==why.rating?` — <strong style="color:#a36f00">rating capped ${why.base} → ${why.rating}</strong>`:''}.<br>
           ${why.up?`<strong>Upgrade path:</strong> ${why.up}<br>`:''}
           ${why.down?`<strong>Downgrade trigger:</strong> ${why.down}`:''}

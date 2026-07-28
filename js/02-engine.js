@@ -824,9 +824,10 @@ function deriveRating(score5y, composite, d, guards){
   if(d && coreDataMissing(d).insufficient){
     return { r:'INSUFFICIENT DATA', caps:[] };
   }
-  let r = score5y>=3.5 && composite>70 ? 'STRONG BUY'
-        : score5y>=2.5 && composite>58 ? 'BUY'
-        : score5y>=1.8 && composite>44 ? 'HOLD'
+  const ann = annualize(score5y, 5);
+  let r = ann>=0.22 && composite>70 ? 'STRONG BUY'
+        : ann>=0.15 && composite>58 ? 'BUY'
+        : ann>=0.08 && composite>44 ? 'HOLD'
         : 'AVOID';
   const base = r;                       // pre-guardrail decision, for the rationale trail
   const caps = [];
@@ -863,12 +864,42 @@ function deriveRating(score5y, composite, d, guards){
   return { r, caps, base };
 }
 
+
+// ── Per-horizon ratings: 1Y / 2Y / 5Y ────────────────────
+// Each horizon's expected value (25% bear / 50% base / 25% bull +
+// dividends) is annualised and rated on the SAME bands as the headline
+// call, then capped at the guardrail ceiling — a manipulation flag or
+// distress zone caps every horizon, not just the 5-year view.
+function calcHorizonRatings(d, ladder, composite, caps){
+  if(!ladder || !d.current_price) return null;
+  const ceiling = (caps && caps.length)
+    ? Math.min(...caps.map(c => RATING_ORDER.indexOf(c.to)))
+    : RATING_ORDER.length - 1;
+  const dps = d.dividend_per_share || 0;
+  return ladder.filter(r => r.k !== '6M').map(row => {
+    const ev  = (0.25*row.bear.px + 0.50*row.base.px + 0.25*row.bull.px + dps*row.t) / d.current_price;
+    const ann = annualize(ev, row.t);
+    let band = ann>=0.22 && composite>70 ? 'STRONG BUY'
+             : ann>=0.15 && composite>58 ? 'BUY'
+             : ann>=0.08 && composite>44 ? 'HOLD'
+             : 'AVOID';
+    if(RATING_ORDER.indexOf(band) > ceiling) band = RATING_ORDER[ceiling];
+    return { k: row.k, t: row.t, label: row.label, term: row.term,
+             ev: +ev.toFixed(2), annRet: +(ann*100).toFixed(1), rating: band };
+  });
+}
+
 // ── Rating rationale: the full decision trail behind the call ─────
 // Everything the verdict rests on, as data — which thresholds were tested
 // against which numbers, what the guardrails saw, and what would move the
 // rating up or down. Rendered in the report and (condensed) in the PDF so
 // no rating ever appears without its justification.
-const RATING_RULES = [ ['STRONG BUY',3.5,70], ['BUY',2.5,58], ['HOLD',1.8,44] ];
+// Bands on ANNUALISED expected return (from the probability-weighted EV),
+// so one rule set rates every horizon consistently: STRONG BUY needs a
+// ~22%/yr expectation (≈2.7× in 5 yrs) plus high quality; BUY ~15%/yr
+// (≈2× in 5 yrs, comfortably above index returns); HOLD ~8%/yr.
+const RATING_RULES = [ ['STRONG BUY',0.22,70], ['BUY',0.15,58], ['HOLD',0.08,44] ];
+const annualize = (evMult, t) => Math.pow(Math.max(evMult, 0.01), 1/t) - 1;
 function buildRatingRationale(d, x){
   const { score5y, scen, sc, rating, base, caps, fv, revDCF, altman, beneish, promoterTrend, cashConv } = x;
   const cmp = d.current_price;
@@ -894,13 +925,14 @@ function buildRatingRationale(d, x){
   ].map(([name,score,w])=>({ name, score, w, contrib: score*w }));
 
   // 4. Threshold tests — which band the numbers actually land in
-  const tests = RATING_RULES.map(([level, sMin, cMin]) => ({
+  const annR = annualize(score5y, 5);
+  const tests = RATING_RULES.map(([level, rMin, cMin]) => ({
     level,
     conds: [
-      { lbl:`5-yr return score ≥ ${sMin}`, ok: score5y>=sMin, val: score5y.toFixed(2) },
+      { lbl:`Expected return ≥ ${(rMin*100).toFixed(0)}%/yr`, ok: annR>=rMin, val: (annR*100).toFixed(1)+'%/yr' },
       { lbl:`Composite > ${cMin}`,         ok: sc.composite>cMin, val: sc.composite.toFixed(0) }
     ],
-    met: score5y>=sMin && sc.composite>cMin
+    met: annR>=rMin && sc.composite>cMin
   }));
 
   // 5. Guardrail audit — every safety screen, whether it fired or not
@@ -935,19 +967,19 @@ function buildRatingRationale(d, x){
     if(idx > 0){
       const [lvl, sMin, cMin] = RATING_RULES[idx-1];
       const needs = [];
-      if(score5y < sMin && scen && cmp){
-        const neededTarget = sMin * cmp;
-        needs.push(`the base-case 5-yr target must reach ₹${neededTarget.toFixed(0)} (now ₹${scen.base5.toFixed(0)}) — i.e. faster verified growth or a cheaper entry price`);
+      if(annualize(score5y,5) < sMin && scen && cmp){
+        const neededMult = Math.pow(1+sMin, 5);
+        needs.push(`the probability-weighted 5-yr value must reach ${neededMult.toFixed(2)}× today's price, i.e. an expected ${(sMin*100).toFixed(0)}%/yr (now ${(annualize(score5y,5)*100).toFixed(1)}%/yr) — faster verified growth or a cheaper entry price`);
       }
       if(sc.composite <= cMin) needs.push(`the composite score must exceed ${cMin} (now ${sc.composite.toFixed(0)})`);
       if(needs.length) up = `For ${lvl}: ${needs.join('; ')}.`;
     } else if(base==='AVOID'){
-      up = `For HOLD: the 5-yr return score must reach 1.8 (now ${score5y.toFixed(2)}) and the composite must exceed 44 (now ${sc.composite.toFixed(0)}).`;
+      up = `For HOLD: the expected return must reach 8%/yr (now ${(annualize(score5y,5)*100).toFixed(1)}%/yr) and the composite must exceed 44 (now ${sc.composite.toFixed(0)}).`;
     }
   }
   const curIdx = RATING_RULES.findIndex(r0=>r0[0]===rating);
   const down = rating==='AVOID' ? null :
-    `The call drops if the 5-yr score falls below ${RATING_RULES[curIdx]?RATING_RULES[curIdx][1]:1.8} or the composite below ${RATING_RULES[curIdx]?RATING_RULES[curIdx][2]:44} — or immediately if any guardrail fires (manipulation flag, distress zone, priced-for-perfection, price > 125% of fair value).`;
+    `The call drops if the expected return falls below ${RATING_RULES[curIdx]?(RATING_RULES[curIdx][1]*100).toFixed(0):'8'}%/yr or the composite below ${RATING_RULES[curIdx]?RATING_RULES[curIdx][2]:44} — or immediately if any guardrail fires (manipulation flag, distress zone, priced-for-perfection, price > 125% of fair value).`;
 
   return { growth, target, pillars, tests, guardrails, up, down, base, rating, composite: sc.composite };
 }
@@ -1307,6 +1339,8 @@ function computeAnalysis(d){
                 : buildRatingRationale(d, { score5y, scen, sc, rating, base, caps, fv, revDCF, altman, beneish, promoterTrend, cashConv });
   const news    = calcNewsImpact(d, rating);
   const ladder  = calcTargetLadder(d);
+  const horizons = calcHorizonRatings(d, ladder, sc.composite, caps);
+  d._horizons = horizons;                            // snapshot for the ledger
   d._lastRating = rating;                            // snapshot for the library shelf
 
   const fscore  = calcPiotroski(d);
@@ -1320,5 +1354,5 @@ function computeAnalysis(d){
            revDCF, altman, beneish, score5y, rating, caps, base, dq, confObj,
            conf: confObj.level, why, news, ladder, fscore, decomp, trend,
            fcfDCF, resInc, dcfCapm, passCount, usedWACC: d._wacc,
-           promoterTrend, cashConv };
+           promoterTrend, cashConv, horizons };
 }
