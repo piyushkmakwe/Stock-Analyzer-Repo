@@ -45,7 +45,7 @@ const MOCK = eval('(' + src.match(/const MOCK = (\{[\s\S]*?\n\});/)[1] + ')');
     out.panelVisible = document.getElementById('ledger').style.display !== 'none';
     out.showsReturn = txt.includes('+12.0%');                    // 1250→1400
     out.showsAgg = txt.includes('By rating band') && txt.includes('1/1 positive');
-    out.honesty = txt.includes('compare against what the Nifty did');
+    out.honesty = txt.includes('judge nothing before ~20 calls') && txt.includes('vs Nifty');
     out.immutableNote = txt.includes('cannot be edited, only exported');
 
     // 5. latest-observation logic picks the newest

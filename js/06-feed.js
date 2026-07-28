@@ -43,6 +43,21 @@ async function yahooQuote(query){
   };
 }
 
+// ── Nifty 50 level — benchmark for the track-record ledger ──
+// Every call/observation stores the index alongside the stock price so
+// the scoreboard can show EXCESS return (beating a fixed % means little
+// if the whole market did the same). Fails soft: null = no benchmark.
+let _niftyCache = null;
+async function fetchNifty(){
+  if(_niftyCache && Date.now()-_niftyCache.t < 10*60*1000) return _niftyCache.v;
+  try{
+    const c = await feedFetch('https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?range=1d&interval=1d', true);
+    const v = c.chart?.result?.[0]?.meta?.regularMarketPrice;
+    if(v>0){ _niftyCache = { t: Date.now(), v }; return v; }
+  }catch(_){}
+  return null;
+}
+
 // ── Screener.in: resolve company page, parse ratios + full statements ──
 async function screenerFundamentals(query){
   const res = await feedFetch('https://www.screener.in/api/company/search/?q='+encodeURIComponent(query), true);
